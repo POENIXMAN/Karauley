@@ -1,0 +1,57 @@
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "dns-monitor.serviceAccountName" . }}
+  namespace: {{ include "dns-monitor.namespace" . }}
+  labels:
+    {{- include "dns-monitor.labels" . | nindent 4 }}
+  {{- with .Values.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+---
+{{- if .Values.rbac.create }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "dns-monitor.fullname" . }}
+  labels:
+    {{- include "dns-monitor.labels" . | nindent 4 }}
+rules:
+  # Для получения информации о подах
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  
+  # Для получения информации о namespaces
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  
+  # Для получения информации о ноде
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get"]
+  
+  # Для получения информации о services (для DNS correlation)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "dns-monitor.fullname" . }}
+  labels:
+    {{- include "dns-monitor.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "dns-monitor.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "dns-monitor.serviceAccountName" . }}
+    namespace: {{ include "dns-monitor.namespace" . }}
+{{- end }}

@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dns-monitor.fullname" . }}-config
+  namespace: {{ include "dns-monitor.namespace" . }}
+  labels:
+    {{- include "dns-monitor.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # DNS Tunnel Detector Configuration
+    
+    detection:
+      # Порог энтропии Шеннона
+      entropy_threshold: {{ .Values.config.detection.entropy_threshold }}
+      
+      # Максимальная длина домена (подозрительно если больше)
+      max_domain_length: {{ .Values.config.detection.max_domain_length }}
+      
+      # Минимальное соотношение цифр для подозрительности
+      digit_ratio_threshold: {{ .Values.config.detection.digit_ratio_threshold }}
+      
+      # Подозрительные типы DNS записей
+      suspicious_types:
+{{- range .Values.config.detection.suspicious_types }}
+        - {{ . }}
+{{- end }}
+      
+      # Подозрительные паттерны (regex)
+      suspicious_patterns:
+{{- range .Values.config.detection.suspicious_patterns }}
+        - {{ . | quote }}
+{{- end }}
+    
+    whitelist:
+      # Домены которые не проверять
+      domains:
+{{- range .Values.config.whitelist.domains }}
+        - {{ . }}
+{{- end }}
+    
+    prometheus:
+      enabled: {{ .Values.config.prometheus.enabled }}
+      port: {{ .Values.config.prometheus.port }}
+      path: {{ .Values.config.prometheus.path | quote }}
+    
+    logging:
+      level: {{ .Values.config.logging.level }}
+      format: {{ .Values.config.logging.format }}
+      # Для SIEM интеграции
+      cef_enabled: {{ .Values.config.logging.cef_enabled }}

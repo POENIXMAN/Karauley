@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns-monitor
+  labels:
+    app: dns-tunnel-detector
+    purpose: security
+

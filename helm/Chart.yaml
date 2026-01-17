@@ -1,0 +1,17 @@
+apiVersion: v2
+name: dns-monitor
+description: DNS Tunnel Detector using eBPF for Kubernetes
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - dns
+  - security
+  - ebpf
+  - monitoring
+  - tunnel-detection
+maintainers:
+  - name: DNS Monitor Team
+home: https://github.com/your-org/dns-monitor
+sources:
+  - https://github.com/your-org/dns-monitor

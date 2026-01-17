@@ -1,0 +1,154 @@
+# Default values for dns-monitor
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  namespace: dns-monitor
+
+# Image configuration
+image:
+  repository: localhost/ebpfmodule
+  tag: v1.0
+  pullPolicy: IfNotPresent
+
+# Application name
+nameOverride: ""
+fullnameOverride: ""
+
+# Service account
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# RBAC
+rbac:
+  create: true
+
+# DaemonSet configuration
+daemonset:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  
+  # Security context
+  securityContext:
+    privileged: true
+    # Alternative minimal capabilities (uncomment to use instead of privileged)
+    # capabilities:
+    #   add:
+    #     - SYS_ADMIN
+    #     - SYS_PTRACE
+    #     - NET_ADMIN
+    #     - BPF
+    #     - PERFMON
+  
+  # Host network access
+  hostNetwork: true
+  hostPID: true
+  dnsPolicy: ClusterFirstWithHostNet
+  
+  # Resource limits
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 128Mi
+      cpu: 100m
+  
+  # Probes
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 8080
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 8080
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  
+  # Tolerations
+  tolerations:
+    - operator: Exists
+      effect: NoSchedule
+    - operator: Exists
+      effect: NoExecute
+  
+  # Node selector
+  nodeSelector: {}
+  # nodeSelector:
+  #   kubernetes.io/os: linux
+
+# Service configuration
+service:
+  enabled: true
+  type: ClusterIP
+  clusterIP: None  # Headless for DaemonSet
+  port: 8080
+  targetPort: 8080
+  name: metrics
+
+# Prometheus annotations
+prometheus:
+  enabled: true
+  scrape: true
+  port: 8080
+  path: /metrics
+
+# ServiceMonitor for Prometheus Operator
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  scrapeTimeout: 10s
+  labels:
+    release: prometheus
+
+# ConfigMap configuration
+config:
+  detection:
+    entropy_threshold: 4.0
+    max_domain_length: 60
+    digit_ratio_threshold: 0.3
+    suspicious_types:
+      - TXT
+      - NULL
+      - CNAME
+    suspicious_patterns:
+      - "^[a-zA-Z0-9+/=]{20,}\\."
+      - "^[0-9a-f]{32,}\\."
+  
+  whitelist:
+    domains:
+      - google.com
+      - googleapis.com
+      - microsoft.com
+      - azure.com
+      - cloudflare.com
+      - amazonaws.com
+      - github.com
+      - docker.io
+  
+  prometheus:
+    enabled: true
+    port: 8080
+    path: /metrics
+  
+  logging:
+    level: INFO
+    format: json
+    cef_enabled: false
+
+# Labels
+labels:
+  app.kubernetes.io/name: dns-monitor
+  app.kubernetes.io/component: security
+  app.kubernetes.io/part-of: dns-tunnel-detection
+
+# Annotations
+annotations: {}

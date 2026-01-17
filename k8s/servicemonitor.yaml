@@ -1,0 +1,24 @@
+# ServiceMonitor для Prometheus Operator
+# Если используется kube-prometheus-stack
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: dns-monitor
+  namespace: dns-monitor
+  labels:
+    app: dns-monitor
+    # Label для Prometheus Operator
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: dns-monitor
+  namespaceSelector:
+    matchNames:
+      - dns-monitor
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+      scrapeTimeout: 10s
+
