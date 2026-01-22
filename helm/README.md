@@ -72,7 +72,7 @@ helm uninstall dns-monitor
 | Параметр | Описание | Значение по умолчанию |
 |----------|-----------|----------------------|
 | `prometheus.enabled` | Включить Prometheus метрики | `true` |
-| `prometheus.port` | Порт для метрик | `8080` |
+| `prometheus.port` | Порт для метрик | `9999` |
 | `prometheus.path` | Путь для метрик | `/metrics` |
 | `serviceMonitor.enabled` | Включить ServiceMonitor | `false` |
 
@@ -149,8 +149,8 @@ kubectl get pods -n dns-monitor
 kubectl logs -n dns-monitor -l app.kubernetes.io/name=dns-monitor
 
 # Проверить метрики
-kubectl port-forward -n dns-monitor svc/dns-monitor 8080:8080
-curl http://localhost:8080/metrics
+kubectl port-forward -n dns-monitor svc/dns-monitor 9999:9999
+curl http://localhost:9999/metrics
 ```
 
 ## Troubleshooting

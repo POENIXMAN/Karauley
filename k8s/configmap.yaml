@@ -42,7 +42,7 @@ data:
     
     prometheus:
       enabled: true
-      port: 8080
+      port: 9999
       path: /metrics
     
     logging:

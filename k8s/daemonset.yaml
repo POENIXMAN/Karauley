@@ -21,7 +21,7 @@ spec:
       annotations:
         # Prometheus annotations для автоматического scraping
         prometheus.io/scrape: "true"
-        prometheus.io/port: "8080"
+        prometheus.io/port: "9999"
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: dns-monitor
@@ -51,7 +51,7 @@ spec:
             #     - PERFMON
           
           ports:
-            - containerPort: 8080
+            - containerPort: 9999
               name: metrics
               protocol: TCP
           
@@ -86,6 +86,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: HOST_PROC
               value: "/host/proc"
+            - name: METRICS_PORT
+              value: "9999"
           
           # Resource limits
           resources:
@@ -100,14 +102,14 @@ spec:
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
+              port: 9999
             initialDelaySeconds: 30
             periodSeconds: 10
           
           readinessProbe:
             httpGet:
               path: /ready
-              port: 8080
+              port: 9999
             initialDelaySeconds: 5
             periodSeconds: 5
       

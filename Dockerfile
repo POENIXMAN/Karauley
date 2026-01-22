@@ -58,7 +58,7 @@ COPY dns_analyzer_improved.py .
 # Примечание: eBPF требует root/privileged, но логи пишем от обычного пользователя
 
 # Health check endpoint
-EXPOSE 8080
+EXPOSE 9999
 
 # Entrypoint
 ENTRYPOINT ["python3", "dns_analyzer_improved.py"]

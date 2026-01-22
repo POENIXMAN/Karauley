@@ -89,6 +89,8 @@ spec:
                   fieldPath: metadata.namespace
             - name: HOST_PROC
               value: "/host/proc"
+            - name: METRICS_PORT
+              value: "{{ .Values.service.port }}"
           
           # Resource limits
           resources:

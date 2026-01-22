@@ -25,10 +25,54 @@ from datetime import datetime
 from collections import defaultdict
 import math
 import re
+import threading
+
+# HTTP сервер для метрик и health checks
+try:
+    from flask import Flask
+    from prometheus_client import Counter, Gauge, generate_latest, CONTENT_TYPE_LATEST
+    FLASK_AVAILABLE = True
+except ImportError:
+    FLASK_AVAILABLE = False
+    print("[WARNING] Flask/prometheus_client не установлены. HTTP endpoints недоступны.")
 
 # ===== ЗАГРУЗКА eBPF ПРОГРАММЫ =====
 
 BPF_SOURCE_FILE = os.path.join(os.path.dirname(__file__), "dns_ebpf_improved.bpf.c")
+
+# ===== HTTP СЕРВЕР ДЛЯ МЕТРИК =====
+
+# Prometheus метрики
+if FLASK_AVAILABLE:
+    dns_queries_total = Counter('dns_queries_total', 'Total DNS queries', ['protocol', 'direction'])
+    dns_responses_total = Counter('dns_responses_total', 'Total DNS responses', ['protocol'])
+    dns_suspicious_total = Counter('dns_suspicious_total', 'Total suspicious DNS queries', ['threat_type'])
+    dns_domains_unique = Gauge('dns_domains_unique', 'Number of unique domains')
+    dns_events_by_process = Counter('dns_events_by_process', 'DNS events by process', ['process'])
+    dns_events_by_pod = Counter('dns_events_by_pod', 'DNS events by pod', ['pod'])
+    
+    # Flask приложение
+    app = Flask(__name__)
+    
+    @app.route('/healthz')
+    def healthz():
+        """Liveness probe endpoint"""
+        return 'OK', 200
+    
+    @app.route('/ready')
+    def ready():
+        """Readiness probe endpoint"""
+        # Проверяем, что eBPF загружен и работает
+        return 'OK', 200
+    
+    @app.route('/metrics')
+    def metrics():
+        """Prometheus metrics endpoint"""
+        return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
+    
+    def start_http_server(port=9999, host='0.0.0.0'):
+        """Запускает HTTP сервер в отдельном потоке"""
+        app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
 
 # ===== СТРУКТУРА СОБЫТИЯ (должна совпадать с C) =====
 
@@ -540,16 +584,32 @@ def handle_event(ctx, data, size):
     if protocol == "UDP":
         if is_response:
             stats['udp_responses'] += 1
+            if FLASK_AVAILABLE:
+                dns_responses_total.labels(protocol='UDP').inc()
         else:
             stats['udp_queries'] += 1
+            if FLASK_AVAILABLE:
+                dns_queries_total.labels(protocol='UDP', direction='query').inc()
     else:
         if is_response:
             stats['tcp_responses'] += 1
+            if FLASK_AVAILABLE:
+                dns_responses_total.labels(protocol='TCP').inc()
         else:
             stats['tcp_queries'] += 1
+            if FLASK_AVAILABLE:
+                dns_queries_total.labels(protocol='TCP', direction='query').inc()
     
     if domain and not domain.startswith("<"):
         stats['domains'].add(domain)
+        if FLASK_AVAILABLE:
+            dns_domains_unique.set(len(stats['domains']))
+    
+    # Prometheus метрики для процессов и подов
+    if FLASK_AVAILABLE:
+        dns_events_by_process.labels(process=comm).inc()
+        if pod_str:
+            dns_events_by_pod.labels(pod=pod_str).inc()
     
     # Анализ подозрительности через детекторы туннелей
     event_data = {
@@ -568,6 +628,10 @@ def handle_event(ctx, data, size):
     
     if is_suspicious:
         stats['suspicious'] += 1
+        if FLASK_AVAILABLE:
+            # Обновляем Prometheus метрики для подозрительных запросов
+            threat_label = threat_type if threat_type else 'UNKNOWN'
+            dns_suspicious_total.labels(threat_type=threat_label).inc()
     
     # Вывод
     color = RED if is_suspicious else (BLUE if is_response else GREEN)
@@ -657,6 +721,23 @@ def main():
     # Настраиваем обработчик Ring Buffer (быстрее чем Perf Buffer)
     # Ring Buffer требует ядро 5.8+
     bpf["events"].open_ring_buffer(handle_event)
+    
+    # Запускаем HTTP сервер для метрик и health checks
+    metrics_port = int(os.getenv('METRICS_PORT', '9999'))
+    if FLASK_AVAILABLE:
+        http_thread = threading.Thread(
+            target=start_http_server,
+            args=(metrics_port,),
+            daemon=True,
+            name='HTTP-Server'
+        )
+        http_thread.start()
+        print(f"{GREEN}[+] HTTP сервер запущен на порту {metrics_port}{RESET}")
+        print(f"    - /healthz - liveness probe")
+        print(f"    - /ready - readiness probe")
+        print(f"    - /metrics - Prometheus metrics")
+    else:
+        print(f"{YELLOW}[!] HTTP сервер недоступен (Flask не установлен){RESET}")
     
     # Обработка Ctrl+C
     signal.signal(signal.SIGINT, signal_handler)

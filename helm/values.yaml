@@ -62,14 +62,14 @@ daemonset:
   livenessProbe:
     httpGet:
       path: /healthz
-      port: 8080
+      port: 9999
     initialDelaySeconds: 30
     periodSeconds: 10
   
   readinessProbe:
     httpGet:
       path: /ready
-      port: 8080
+      port: 9999
     initialDelaySeconds: 5
     periodSeconds: 5
   
@@ -90,15 +90,15 @@ service:
   enabled: true
   type: ClusterIP
   clusterIP: None  # Headless for DaemonSet
-  port: 8080
-  targetPort: 8080
+  port: 9999
+  targetPort: 9999
   name: metrics
 
 # Prometheus annotations
 prometheus:
   enabled: true
   scrape: true
-  port: 8080
+  port: 9999
   path: /metrics
 
 # ServiceMonitor for Prometheus Operator
@@ -136,7 +136,7 @@ config:
   
   prometheus:
     enabled: true
-    port: 8080
+    port: 9999
     path: /metrics
   
   logging:
