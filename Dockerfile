@@ -45,7 +45,8 @@ COPY --from=builder /opt/packages /opt/packages
 
 # Добавляем скопированные пакеты в PYTHONPATH
 # BCC будет доступен через системный python3-bpfcc
-ENV PYTHONPATH="/opt/packages:${PYTHONPATH}"
+# Используем синтаксис без $ для избежания предупреждений
+ENV PYTHONPATH=/opt/packages
 
 # Рабочая директория
 WORKDIR /app
