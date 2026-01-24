@@ -43,9 +43,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Копируем установленные Python пакеты из builder
 COPY --from=builder /opt/packages /opt/packages
 
+# Проверяем, что bcc доступен после установки python3-bpfcc
+RUN python3 -c "import sys; print('Python version:', sys.version); print('Python paths:', sys.path)" \
+    && python3 -c "import bcc; print('BCC imported successfully from:', bcc.__file__)" \
+    || (echo "BCC import failed, checking installation..." \
+        && dpkg -L python3-bpfcc | grep -E "(bcc|\.py)" | head -5 \
+        && find /usr -name "*bcc*" -type f 2>/dev/null | head -10)
+
 # Добавляем скопированные пакеты в PYTHONPATH
-# BCC будет доступен через системный python3-bpfcc
-# Используем синтаксис без $ для избежания предупреждений
+# Python автоматически проверяет системные пути где установлен python3-bpfcc
 ENV PYTHONPATH=/opt/packages
 
 # Рабочая директория
