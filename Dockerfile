@@ -18,22 +18,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Создаем виртуальное окружение
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Копируем и устанавливаем зависимости
+# Устанавливаем Python зависимости в отдельную директорию
+# Это позволит скопировать их в runtime без проблем с путями
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --target=/opt/packages -r requirements.txt
 
 # ============================================
 # Stage 2: Runtime
 # ============================================
 FROM base AS runtime
 
-# Установка runtime зависимостей для BCC
+# Установка только runtime зависимостей
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    # BCC runtime
+    # BCC runtime (системный пакет)
     bpfcc-tools \
     python3-bpfcc \
     # Для работы с kernel
@@ -43,9 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
-# Копируем виртуальное окружение из builder
-COPY --from=builder /opt/venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
+# Копируем установленные Python пакеты из builder
+COPY --from=builder /opt/packages /opt/packages
+
+# Добавляем скопированные пакеты в PYTHONPATH
+# BCC будет доступен через системный python3-bpfcc
+ENV PYTHONPATH="/opt/packages:${PYTHONPATH}"
 
 # Рабочая директория
 WORKDIR /app
@@ -61,5 +61,6 @@ COPY dns_analyzer_improved.py .
 EXPOSE 9999
 
 # Entrypoint
+# Используем системный python3, т.к. bcc доступен только через python3-bpfcc
 ENTRYPOINT ["python3", "dns_analyzer_improved.py"]
 
