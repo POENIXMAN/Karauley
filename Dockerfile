@@ -44,11 +44,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /opt/packages /opt/packages
 
 # Проверяем, что bcc доступен после установки python3-bpfcc
-RUN python3 -c "import sys; print('Python version:', sys.version); print('Python paths:', sys.path)" \
-    && python3 -c "import bcc; print('BCC imported successfully from:', bcc.__file__)" \
-    || (echo "BCC import failed, checking installation..." \
-        && dpkg -L python3-bpfcc | grep -E "(bcc|\.py)" | head -5 \
-        && find /usr -name "*bcc*" -type f 2>/dev/null | head -10)
+# Если проверка не пройдет, сборка упадет с понятной ошибкой
+RUN python3 -c "import bcc; print('BCC imported successfully')" || \
+    (echo "ERROR: BCC module not found after installing python3-bpfcc" && exit 1)
 
 # Добавляем скопированные пакеты в PYTHONPATH
 # Python автоматически проверяет системные пути где установлен python3-bpfcc
