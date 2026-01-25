@@ -161,30 +161,55 @@ static __always_inline void parse_dns_header(u8 *data, u16 data_len, struct dns_
         event->dns_answers = (data[6] << 8) | data[7];
     }
 
-// Получение указателя на данные из iov_iter (работает на разных ядрах)
+// Константы iter_type из include/linux/uio.h (5.15+)
+#ifndef ITER_UBUF
+#define ITER_UBUF 0
+#endif
+#ifndef ITER_IOVEC
+#define ITER_IOVEC 1
+#endif
+
+// Получение указателя на данные из iov_iter.
+// Совместимость: рассчитано на ядро 5.15+ (layout из mainline uio.h).
+// В 5.15+ ubuf/__iov во вложенной анонимной union — используем смещения.
+// Смещения: iter_type=0; union после iter_type,nofault,data_source,iov_offset → 16.
+// На 6.x layout может совпадать; при сбоях на новых ядрах проверьте offsetof(struct iov_iter).
+#define IOV_ITER_ITER_TYPE_OFF  0
+#define IOV_ITER_UNION_OFF      16
+
 static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
     if (!iter) {
         return NULL;
     }
     
     void *data_ptr = NULL;
+    u8 iter_type = 0;
+    long ret;
     
-    // Пробуем ubuf (ядра 5.14+, 6.x)
-    long ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), &iter->ubuf);
+    ret = bpf_probe_read_kernel(&iter_type, sizeof(iter_type), (void *)iter + IOV_ITER_ITER_TYPE_OFF);
     if (ret != 0) {
-        data_ptr = NULL;
+        return NULL;
     }
     
-    if (!data_ptr) {
-        // Fallback: iov (ядра 5.x и ранее)
+    if (iter_type == ITER_UBUF) {
+        // Один буфер: в union лежит struct iovec __ubuf_iovec, iov_base в начале
+        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iter + IOV_ITER_UNION_OFF);
+        return (ret == 0) ? data_ptr : NULL;
+    }
+    
+    if (iter_type == ITER_IOVEC) {
+        // Массив iovec: в union лежит указатель __iov на const struct iovec*
         const struct iovec *iov = NULL;
-        ret = bpf_probe_read_kernel(&iov, sizeof(iov), &iter->__iov);
-        if (ret == 0 && iov) {
-            bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), &iov->iov_base);
+        ret = bpf_probe_read_kernel(&iov, sizeof(iov), (void *)iter + IOV_ITER_UNION_OFF);
+        if (ret != 0 || !iov) {
+            return NULL;
         }
+        // iov_base — первое поле struct iovec, читаем по указателю iov
+        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iov);
+        return (ret == 0) ? data_ptr : NULL;
     }
     
-    return data_ptr;
+    return NULL;
 }
 
 // ===== UDP DNS ЗАПРОСЫ =====

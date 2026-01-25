@@ -72,6 +72,12 @@ spec:
             - name: config
               mountPath: /etc/dns-monitor
               readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: src
+              mountPath: /usr/src
+              readOnly: true
           
           # Environment variables
           env:
@@ -120,6 +126,14 @@ spec:
         - name: debugfs
           hostPath:
             path: /sys/kernel/debug
+            type: Directory
+        - name: modules
+          hostPath:
+          path: /lib/modules
+          type: Directory
+        - name: src
+          hostPath:
+            path: /usr/src
             type: Directory
         - name: config
           configMap:
