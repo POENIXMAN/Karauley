@@ -53,15 +53,11 @@ WORKDIR /app
 
 COPY dns_ebpf_improved.bpf.c .
 COPY dns_analyzer_improved.py .
-
-
-# Создаем non-root пользователя (для логов, не для eBPF)
-# Примечание: eBPF требует root/privileged, но логи пишем от обычного пользователя
-
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Health check endpoint
 EXPOSE 9999
 
-
-
-ENTRYPOINT ["python3", "dns_analyzer_improved.py"]
+# Обёртка поднимает ulimit -l (memlock) для BPF, иначе в контейнере часто 64 KB и падает с "Cannot allocate memory"
+ENTRYPOINT ["/entrypoint.sh"]
