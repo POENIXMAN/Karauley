@@ -25,7 +25,9 @@ from datetime import datetime
 from collections import defaultdict
 import math
 import re
+import resource
 import threading
+import traceback
 
 # HTTP сервер для метрик и health checks
 try:
@@ -705,22 +707,45 @@ def main():
     print(f"    ✓ {GREEN}Ring Buffer{RESET} (быстрее на 20-30%, FIFO порядок)")
     print("=" * 80)
     
-    # Загружаем eBPF
+    # Лимит memlock у этого процесса (тот же, что будет выделять BPF)
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_MEMLOCK)
+        soft_s = "unlimited" if soft == -1 else f"{soft} bytes"
+        hard_s = "unlimited" if hard == -1 else f"{hard} bytes"
+        print(f"\n[DEBUG] RLIMIT_MEMLOCK: soft={soft_s}, hard={hard_s}")
+    except (ValueError, OSError, AttributeError) as e:
+        print(f"\n[DEBUG] RLIMIT_MEMLOCK: N/A ({e})")
+    
+    # Загружаем eBPF по шагам для отладки
     print(f"\n[*] Загрузка eBPF из {BPF_SOURCE_FILE}...")
     
     try:
+        print(f"[*] Шаг 1/3: чтение файла...")
         with open(BPF_SOURCE_FILE, 'r') as f:
             bpf_text = f.read()
-        
-        bpf = BPF(text=bpf_text)
-        print(f"{GREEN}[+] eBPF программа загружена успешно{RESET}")
+        print(f"[*] Шаг 1/3: OK ({len(bpf_text)} байт)")
     except Exception as e:
-        print(f"{RED}[!] Ошибка загрузки eBPF: {e}{RESET}")
+        print(f"{RED}[!] Ошибка на шаге 1 (чтение файла): {e}{RESET}")
+        traceback.print_exc()
         sys.exit(1)
     
-    # Настраиваем обработчик Ring Buffer (быстрее чем Perf Buffer)
-    # Ring Buffer требует ядро 5.8+
-    bpf["events"].open_ring_buffer(handle_event)
+    try:
+        print(f"[*] Шаг 2/3: BPF(text=...) — компиляция и загрузка в ядро...")
+        bpf = BPF(text=bpf_text)
+        print(f"{GREEN}[+] Шаг 2/3: OK — eBPF программа загружена{RESET}")
+    except Exception as e:
+        print(f"{RED}[!] Ошибка на шаге 2 (BPF load): {e}{RESET}")
+        traceback.print_exc()
+        sys.exit(1)
+    
+    try:
+        print(f"[*] Шаг 3/3: открытие ring buffer (map 'events')...")
+        bpf["events"].open_ring_buffer(handle_event)
+        print(f"{GREEN}[+] Шаг 3/3: OK — ring buffer открыт{RESET}")
+    except Exception as e:
+        print(f"{RED}[!] Ошибка на шаге 3 (open_ring_buffer): {e}{RESET}")
+        traceback.print_exc()
+        sys.exit(1)
     
     # Запускаем HTTP сервер для метрик и health checks
     metrics_port = int(os.getenv('METRICS_PORT', '9999'))

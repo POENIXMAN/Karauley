@@ -53,11 +53,7 @@ WORKDIR /app
 
 COPY dns_ebpf_improved.bpf.c .
 COPY dns_analyzer_improved.py .
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
-# Health check endpoint
 EXPOSE 9999
 
-# Обёртка поднимает ulimit -l (memlock) для BPF, иначе в контейнере часто 64 KB и падает с "Cannot allocate memory"
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["python3", "dns_analyzer_improved.py"]
