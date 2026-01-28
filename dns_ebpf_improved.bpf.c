@@ -83,10 +83,9 @@ struct dns_event {
     u8  dns_data[MAX_DNS_DATA];
 } __attribute__((packed));
 
-// Ring Buffer для передачи в userspace (быстрее чем Perf Buffer)
-// Требует ядро 5.8+
-// Размер: 256KB (достаточно для ~800 событий в буфере)
-BPF_RINGBUF_OUTPUT(events, 1 << 18);  // 256 KB
+// Perf Buffer — другой путь выделения памяти в ядре; при "Cannot allocate memory"
+// с Ring Buffer часто помогает (требует ядро 4.4+).
+BPF_PERF_OUTPUT(events);
 
 // Map для сохранения контекста между kprobe и kretprobe
 struct recv_context {
@@ -257,7 +256,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     
     if (ret != 0) {
         event.data_len = 0;
-        events.ringbuf_output(&event, sizeof(event), 0);
+        events.perf_submit(ctx, &event, sizeof(event));
         return 0;
     }
     
@@ -278,7 +277,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     }
     
     // Отправляем ВСЕ DNS события в userspace
-    events.ringbuf_output(&event, sizeof(event), 0);
+    events.perf_submit(ctx, &event, sizeof(event));
     
     return 0;
 }
@@ -364,7 +363,7 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
     recv_ctx_map.delete(&pid_tgid);
     
     // Отправляем ВСЕ DNS события в userspace
-    events.ringbuf_output(&event, sizeof(event), 0);
+    events.perf_submit(ctx, &event, sizeof(event));
     
     return 0;
 }
@@ -428,7 +427,7 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
                     // Успешно прочитали - отправляем сразу
                     event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                     parse_dns_header(event.dns_data, event.data_len, &event);
-                    events.ringbuf_output(&event, sizeof(event), 0);
+                    events.perf_submit(ctx, &event, sizeof(event));
                     return 0;
                 }
             }
@@ -572,7 +571,7 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
     send_ctx_map.delete(&pid_tgid);
     
     // Отправляем ВСЕ DNS события в userspace
-    events.ringbuf_output(&event, sizeof(event), 0);
+    events.perf_submit(ctx, &event, sizeof(event));
     
     return 0;
 }
@@ -683,7 +682,7 @@ int kretprobe__tcp_recvmsg(struct pt_regs *ctx) {
     recv_ctx_map.delete(&pid_tgid);
     
     // Отправляем ВСЕ DNS события в userspace
-    events.ringbuf_output(&event, sizeof(event), 0);
+    events.perf_submit(ctx, &event, sizeof(event));
     
     return 0;
 }

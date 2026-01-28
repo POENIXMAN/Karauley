@@ -525,8 +525,8 @@ domain_history = defaultdict(list)
 
 # ===== ОБРАБОТКА СОБЫТИЙ =====
 
-def handle_event(ctx, data, size):
-    """Обработчик событий из eBPF"""
+def handle_event(cpu, data, size):
+    """Обработчик событий из eBPF (Perf Buffer: cpu, data, size)"""
     global stats
     
     event = ctypes.cast(data, ctypes.POINTER(DNSEvent)).contents
@@ -739,11 +739,11 @@ def main():
         sys.exit(1)
     
     try:
-        print(f"[*] Шаг 3/3: открытие ring buffer (map 'events')...")
-        bpf["events"].open_ring_buffer(handle_event)
-        print(f"{GREEN}[+] Шаг 3/3: OK — ring buffer открыт{RESET}")
+        print(f"[*] Шаг 3/3: открытие perf buffer (map 'events')...")
+        bpf["events"].open_perf_buffer(handle_event)
+        print(f"{GREEN}[+] Шаг 3/3: OK — perf buffer открыт{RESET}")
     except Exception as e:
-        print(f"{RED}[!] Ошибка на шаге 3 (open_ring_buffer): {e}{RESET}")
+        print(f"{RED}[!] Ошибка на шаге 3 (open_perf_buffer): {e}{RESET}")
         traceback.print_exc()
         sys.exit(1)
     
@@ -768,12 +768,12 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     
     print(f"\n[*] Мониторинг активен (Ctrl+C для статистики)...")
-    print(f"[*] Используется Ring Buffer (требует ядро 5.8+)")
+    print(f"[*] Используется Perf Buffer")
     print("-" * 80)
     
     while True:
         try:
-            bpf.ring_buffer_poll()
+            bpf.perf_buffer_poll()
         except KeyboardInterrupt:
             break
     
