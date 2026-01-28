@@ -704,7 +704,7 @@ def main():
     print(f"    ✓ UDP + TCP DNS")
     print(f"    ✓ Kubernetes pod идентификация")
     print(f"    ✓ Kernel timestamp (для анализа частоты)")
-    print(f"    ✓ {GREEN}Ring Buffer{RESET} (быстрее на 20-30%, FIFO порядок)")
+    print(f"    ✓ {GREEN}Perf Buffer{RESET} (совместимость при ограничениях памяти)")
     print("=" * 80)
     
     # Лимит memlock у этого процесса (тот же, что будет выделять BPF)
@@ -773,7 +773,7 @@ def main():
     
     while True:
         try:
-            bpf.perf_buffer_poll()
+            bpf.perf_buffer_poll(300)  # timeout ms
         except KeyboardInterrupt:
             break
     
