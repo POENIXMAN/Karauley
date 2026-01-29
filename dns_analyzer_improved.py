@@ -531,13 +531,19 @@ def handle_event(cpu, data, size):
     
     event = ctypes.cast(data, ctypes.POINTER(DNSEvent)).contents
     
-    # Парсим домен
-    domain = parse_dns_name(list(event.dns_data))
+    # Парсим домен (используем data_len, иначе парсим мусор и домены не считаются)
+    raw = event.dns_data
+    data_len = event.data_len or len(raw)
+    if data_len >= 12:
+        domain = parse_dns_name(list(raw)[:data_len], offset=12)
+    else:
+        domain = None
     if not domain:
         domain = "<unparseable>"
     
-    # Тип DNS
-    dns_type = parse_dns_type(list(event.dns_data))
+    # Тип DNS (тот же срез по data_len)
+    dns_payload = list(raw)[:data_len] if data_len else list(raw)
+    dns_type = parse_dns_type(dns_payload)
     dns_type_name = get_dns_type_name(dns_type)
     
     # Направление
@@ -607,11 +613,10 @@ def handle_event(cpu, data, size):
         if FLASK_AVAILABLE:
             dns_domains_unique.set(len(stats['domains']))
     
-    # Prometheus метрики для процессов и подов
+    # Prometheus метрики для процессов и подов (всегда инкремент для видимости в Grafana)
     if FLASK_AVAILABLE:
-        dns_events_by_process.labels(process=comm).inc()
-        if pod_str:
-            dns_events_by_pod.labels(pod=pod_str).inc()
+        dns_events_by_process.labels(process=comm or "unknown").inc()
+        dns_events_by_pod.labels(pod=pod_str or "host").inc()
     
     # Анализ подозрительности через детекторы туннелей
     event_data = {

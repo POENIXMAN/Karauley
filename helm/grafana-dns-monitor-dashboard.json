@@ -1,7 +1,5 @@
 {
-  "annotations": {
-    "list": []
-  },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -11,110 +9,72 @@
   "panels": [
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "id": 1,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        {
-          "expr": "sum(rate(dns_queries_total[5m])) by (protocol, direction)",
-          "legendFormat": "{{protocol}} {{direction}}",
-          "refId": "A"
-        }
+        { "expr": "sum(rate(dns_queries_total[5m])) by (protocol, direction)", "legendFormat": "{{protocol}} {{direction}}", "refId": "A" }
       ],
       "title": "DNS queries rate (by protocol & direction)",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "id": 2,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        {
-          "expr": "sum(rate(dns_responses_total[5m])) by (protocol)",
-          "legendFormat": "{{protocol}}",
-          "refId": "A"
-        }
+        { "expr": "sum(rate(dns_responses_total[5m])) by (protocol)", "legendFormat": "{{protocol}}", "refId": "A" }
       ],
       "title": "DNS responses rate (by protocol)",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "id": 3,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        {
-          "expr": "sum(rate(dns_suspicious_total[5m])) by (threat_type)",
-          "legendFormat": "{{threat_type}}",
-          "refId": "A"
-        }
+        { "expr": "sum(rate(dns_suspicious_total[5m])) by (threat_type)", "legendFormat": "{{threat_type}}", "refId": "A" }
       ],
-      "title": "Suspicious DNS (by threat type)",
+      "title": "Suspicious DNS (by threat_type). Empty = no suspicious traffic yet",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "thresholds" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "id": 4,
       "options": {},
       "targets": [
-        { "expr": "dns_domains_unique", "legendFormat": "Unique domains", "refId": "A" }
+        { "expr": "sum(dns_domains_unique)", "legendFormat": "Unique domains", "refId": "A" }
       ],
       "title": "Unique domains (gauge)",
       "type": "stat"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "id": 5,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        {
-          "expr": "sum(rate(dns_events_by_pod[5m])) by (pod)",
-          "legendFormat": "{{pod}}",
-          "refId": "A"
-        }
+        { "expr": "sum(rate(dns_events_by_pod_total[5m])) by (pod)", "legendFormat": "{{pod}}", "refId": "A" }
       ],
       "title": "DNS events by pod",
       "type": "timeseries"
     },
     {
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
-      "fieldConfig": {
-        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
-        "overrides": []
-      },
+      "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" }, "overrides": [] },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "id": 6,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        {
-          "expr": "sum(rate(dns_events_by_process[5m])) by (process)",
-          "legendFormat": "{{process}}",
-          "refId": "A"
-        }
+        { "expr": "sum(rate(dns_events_by_process_total[5m])) by (process)", "legendFormat": "{{process}}", "refId": "A" }
       ],
       "title": "DNS events by process",
       "type": "timeseries"
@@ -126,33 +86,7 @@
   "tags": ["dns", "ebpf", "security"],
   "templating": {
     "list": [
-      {
-        "current": {},
-        "datasource": { "type": "prometheus", "uid": "${datasource}" },
-        "definition": "label_values(up{job=~\".*dns-monitor.*\"}, job)",
-        "hide": 0,
-        "includeAll": false,
-        "name": "job",
-        "options": [],
-        "query": { "query": "label_values(up{job=~\".*dns-monitor.*\"}, job)", "refId": "StandardVariableQuery" },
-        "refresh": 1,
-        "skipUrlSync": false,
-        "sort": 0,
-        "type": "query"
-      },
-      {
-        "current": {},
-        "hide": 0,
-        "includeAll": false,
-        "multi": false,
-        "name": "datasource",
-        "options": [],
-        "query": "prometheus",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "type": "datasource"
-      }
+      { "current": {}, "hide": 0, "includeAll": false, "multi": false, "name": "datasource", "options": [], "query": "prometheus", "refresh": 1, "regex": "", "skipUrlSync": false, "type": "datasource" }
     ]
   },
   "time": { "from": "now-1h", "to": "now" },
