@@ -195,9 +195,13 @@ class PodResolver:
         return pod_info
     
     def _resolve_from_cgroup(self, pid):
-        """Читает cgroup файл процесса для определения пода"""
+        """Читает cgroup файл процесса для определения пода.
+        eBPF даёт host PID; нужно читать cgroup с хоста (/host/proc), иначе в контейнере
+        /proc/<pid> — это процесс из нашего пода и мы всегда получаем dns-monitor.
+        """
         try:
-            cgroup_path = f"/proc/{pid}/cgroup"
+            proc_root = os.environ.get("HOST_PROC", "/proc")
+            cgroup_path = os.path.join(proc_root, str(pid), "cgroup")
             if not os.path.exists(cgroup_path):
                 return None
             

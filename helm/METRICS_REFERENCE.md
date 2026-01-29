@@ -67,3 +67,4 @@
 - В Grafana: запрос `sum(rate(dns_events_by_process_total[5m])) by (process, pod)` — в легенде будет, например, `nslookup @ default/dns-suspicious-exfil`.
 - Метка **pod** при работе в кластере с RBAC (list pods) подставляется как **namespace/name** (например `default/dns-suspicious-exfil`), иначе — `pod:<uid>` или `host`.
 - Так можно увидеть, в каком именно поде идёт DNS-трафик от конкретного процесса (nslookup, curl и т.д.).
+- **Важно:** cgroup процесса читается из **хоста** (`HOST_PROC`, обычно `/host/proc`). DaemonSet должен монтировать host `/proc` в `/host/proc` и задавать `HOST_PROC=/host/proc`, иначе PID из eBPF интерпретируется в namespace контейнера и в метрике всегда будет под dns-monitor.
