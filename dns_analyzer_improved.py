@@ -240,25 +240,41 @@ class PodResolver:
                     
                     if 'kubepods' in line or 'docker' in line or 'containerd' in line:
                         parts = line.strip().split('/')
-                        
-                        # Ищем pod UID
+                        # cgroup v1: .../kubepods/burstable/pod<uid>/<container_id>
                         for i, part in enumerate(parts):
-                            if part.startswith('pod'):
+                            if part.startswith('pod') and not part.startswith('pod.'):
                                 pod_uid = part[3:]  # Убираем 'pod'
-                                container_id = parts[i+1] if i+1 < len(parts) else None
-                                result = {
-                                    'type': 'kubernetes',
-                                    'pod_uid': pod_uid[:12],  # Короткий UID
-                                    'container_id': container_id[:12] if container_id else None,
-                                    'full_path': line.strip()
-                                }
-                                if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
-                                    _debug_pod(f"pid={pid} -> pod_uid={result['pod_uid']} container_id={result.get('container_id')}")
-                                return result
-                        
-                        # Docker container
+                                if pod_uid and pod_uid[0].isalnum():
+                                    container_id = parts[i+1] if i+1 < len(parts) else None
+                                    result = {
+                                        'type': 'kubernetes',
+                                        'pod_uid': pod_uid[:12],
+                                        'container_id': container_id[:12] if container_id else None,
+                                        'full_path': line.strip()
+                                    }
+                                    if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
+                                        _debug_pod(f"pid={pid} -> pod_uid={result['pod_uid']} (v1) container_id={result.get('container_id')}")
+                                    return result
+                        # cgroup v2 / containerd: .../kubepods-pod<uid>.slice (uid can have hyphens)
                         for part in parts:
-                            if len(part) == 64:  # Container ID
+                            if part.startswith('kubepods-pod') and '.slice' in part:
+                                # e.g. kubepods-pod1a2b3c4d_abcd.slice or kubepods-pod1a2b3c4d-abcd-1234-5678.slice
+                                raw = part[12:].split('.slice')[0]  # after "kubepods-pod"
+                                # use first 12 chars for API lookup (K8s UID prefix)
+                                uid_12 = (raw.replace('_', '-')[:12]) if raw else ""
+                                if uid_12 and (uid_12[0].isalnum() or uid_12[0] in '-_'):
+                                    result = {
+                                        'type': 'kubernetes',
+                                        'pod_uid': uid_12,
+                                        'container_id': None,
+                                        'full_path': line.strip()
+                                    }
+                                    if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
+                                        _debug_pod(f"pid={pid} -> pod_uid={result['pod_uid']} (v2) container_id={result.get('container_id')}")
+                                    return result
+                        # Docker container (64-char id)
+                        for part in parts:
+                            if len(part) == 64 and part.isalnum():
                                 result = {
                                     'type': 'docker',
                                     'container_id': part[:12],
