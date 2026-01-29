@@ -12,8 +12,8 @@
 | **dns_responses_total** | Counter | `protocol` (UDP/TCP) | Всего DNS-ответов (входящих). |
 | **dns_suspicious_total** | Counter | `threat_type` (C2, EXFIL, TUNNEL или комбинация, напр. C2+EXFIL) | Запросы, помеченные как подозрительные детекторами туннелей. Серия появляется только после первого такого события. |
 | **dns_domains_unique** | Gauge | — | Текущее число уникальных доменов (по всем обработанным событиям). |
-| **dns_events_by_process_total** | Counter | `process` (имя процесса, напр. nslookup, python3) | Событий DNS по процессу. |
-| **dns_events_by_pod_total** | Counter | `pod` (pod:uid или container:id или host) | Событий DNS по поду/контейнеру/хосту. |
+| **dns_events_by_process_total** | Counter | `process`, **`pod`** (namespace/name или pod:uid или host) | Событий DNS по процессу **и поду** — чтобы определить, в каком поде идёт трафик (например, «nslookup @ default/dns-suspicious-exfil»). |
+| **dns_events_by_pod_total** | Counter | `pod` (namespace/name или pod:uid или host) | Событий DNS по поду/контейнеру/хосту. |
 
 ---
 
@@ -46,7 +46,7 @@
 | RPS ответов по протоколу | `sum(rate(dns_responses_total[5m])) by (protocol)` |
 | RPS подозрительных по типу угрозы | `sum(rate(dns_suspicious_total[5m])) by (threat_type)` |
 | Уникальные домены (агрегат по инстансам) | `sum(dns_domains_unique)` |
-| RPS по процессам | `sum(rate(dns_events_by_process_total[5m])) by (process)` |
+| RPS по процессам и подам (pinpoint) | `sum(rate(dns_events_by_process_total[5m])) by (process, pod)` |
 | RPS по подам | `sum(rate(dns_events_by_pod_total[5m])) by (pod)` |
 
 ---
@@ -58,3 +58,12 @@
 - **TUNNEL** — IP-Over-DNS (iodine и т.п.): NULL-запросы, очень высокая частота запросов, много ответов.
 
 Один запрос может дать комбинацию, например `C2+EXFIL` или `C2+TUNNEL`.
+
+---
+
+## Как определить «заражённый» под (pinpoint)
+
+- Используйте метрику **dns_events_by_process_total** с метками **process** и **pod**.
+- В Grafana: запрос `sum(rate(dns_events_by_process_total[5m])) by (process, pod)` — в легенде будет, например, `nslookup @ default/dns-suspicious-exfil`.
+- Метка **pod** при работе в кластере с RBAC (list pods) подставляется как **namespace/name** (например `default/dns-suspicious-exfil`), иначе — `pod:<uid>` или `host`.
+- Так можно увидеть, в каком именно поде идёт DNS-трафик от конкретного процесса (nslookup, curl и т.д.).

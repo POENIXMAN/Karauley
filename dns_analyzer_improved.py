@@ -50,7 +50,7 @@ if FLASK_AVAILABLE:
     dns_responses_total = Counter('dns_responses_total', 'Total DNS responses', ['protocol'])
     dns_suspicious_total = Counter('dns_suspicious_total', 'Total suspicious DNS queries', ['threat_type'])
     dns_domains_unique = Gauge('dns_domains_unique', 'Number of unique domains')
-    dns_events_by_process = Counter('dns_events_by_process', 'DNS events by process', ['process'])
+    dns_events_by_process = Counter('dns_events_by_process', 'DNS events by process (and pod for pinpointing)', ['process', 'pod'])
     dns_events_by_pod = Counter('dns_events_by_pod', 'DNS events by pod', ['pod'])
     
     # Flask приложение
@@ -126,21 +126,69 @@ RESET = "\033[0m"
 # ===== МАППИНГ CGROUP -> POD =====
 
 class PodResolver:
-    """Определяет pod name по cgroup_id"""
+    """Определяет pod name по cgroup_id; в K8s может разрешать UID -> namespace/name для удобства."""
     
     def __init__(self):
         self.cgroup_cache = {}
         self.netns_cache = {}
+        self._uid_to_ns_name = {}  # pod_uid (12 chars) -> "namespace/name"
+        self._k8s_resolve_enabled = None  # lazy: check once
+    
+    def _in_cluster(self):
+        if self._k8s_resolve_enabled is None:
+            self._k8s_resolve_enabled = bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
+        return self._k8s_resolve_enabled
+    
+    def _resolve_uid_to_namespace_name(self, uid_12):
+        """Опционально: по pod UID (12 символов) получить namespace/name через K8s API. Кэшируем."""
+        if uid_12 in self._uid_to_ns_name:
+            return self._uid_to_ns_name[uid_12]
+        if not self._in_cluster():
+            return None
+        try:
+            token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
+            port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+            if not host or not os.path.exists(token_path):
+                return None
+            with open(token_path, "r") as f:
+                token = f.read().strip()
+            import ssl
+            import urllib.request
+            ca = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+            ctx = ssl.create_default_context(cafile=ca) if os.path.exists(ca) else ssl.create_default_context()
+            url = f"https://{host}:{port}/api/v1/pods?limit=500"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = __import__("json").loads(resp.read().decode())
+            for item in data.get("items", []):
+                meta = item.get("metadata", {})
+                uid = meta.get("uid", "")
+                if uid.startswith(uid_12) or uid[:12] == uid_12:
+                    ns = meta.get("namespace", "default")
+                    name = meta.get("name", "")
+                    result = f"{ns}/{name}"
+                    self._uid_to_ns_name[uid_12] = result
+                    return result
+            self._uid_to_ns_name[uid_12] = None  # not found, don't retry every time
+        except Exception:
+            pass
+        return None
     
     def get_pod_info(self, pid, cgroup_id, netns_id):
-        """Получает информацию о поде"""
+        """Получает информацию о поде (cgroup -> uid; в K8s опционально namespace/name)."""
         
-        # Проверяем кэш
         if cgroup_id in self.cgroup_cache:
             return self.cgroup_cache[cgroup_id]
         
         pod_info = self._resolve_from_cgroup(pid)
         
+        if pod_info and pod_info.get("type") == "kubernetes":
+            uid = pod_info.get("pod_uid", "")
+            if uid:
+                ns_name = self._resolve_uid_to_namespace_name(uid)
+                if ns_name:
+                    pod_info["namespace_name"] = ns_name
         if pod_info:
             self.cgroup_cache[cgroup_id] = pod_info
         
@@ -556,11 +604,13 @@ def handle_event(cpu, data, size):
     # Процесс
     comm = event.comm.decode('utf-8', errors='ignore').rstrip('\x00')
     
-    # Pod информация
+    # Pod информация (по возможности namespace/name для быстрого поиска "какой под")
     pod_info = pod_resolver.get_pod_info(event.pid, event.cgroup_id, event.netns_id)
     pod_str = ""
     if pod_info:
-        if pod_info['type'] == 'kubernetes':
+        if pod_info.get("namespace_name"):
+            pod_str = pod_info["namespace_name"]  # e.g. default/dns-suspicious-exfil
+        elif pod_info['type'] == 'kubernetes':
             pod_str = f"pod:{pod_info['pod_uid']}"
         else:
             pod_str = f"container:{pod_info['container_id']}"
@@ -613,10 +663,11 @@ def handle_event(cpu, data, size):
         if FLASK_AVAILABLE:
             dns_domains_unique.set(len(stats['domains']))
     
-    # Prometheus метрики для процессов и подов (всегда инкремент для видимости в Grafana)
+    # Prometheus метрики: process+pod вместе — чтобы в Grafana видеть "какой под какой процесс"
+    pod_label = pod_str or "host"
     if FLASK_AVAILABLE:
-        dns_events_by_process.labels(process=comm or "unknown").inc()
-        dns_events_by_pod.labels(pod=pod_str or "host").inc()
+        dns_events_by_process.labels(process=comm or "unknown", pod=pod_label).inc()
+        dns_events_by_pod.labels(pod=pod_label).inc()
     
     # Анализ подозрительности через детекторы туннелей
     event_data = {

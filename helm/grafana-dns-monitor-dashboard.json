@@ -74,9 +74,9 @@
       "id": 6,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        { "expr": "sum(rate(dns_events_by_process_total[5m])) by (process)", "legendFormat": "{{process}}", "refId": "A" }
+        { "expr": "sum(rate(dns_events_by_process_total[5m])) by (process, pod)", "legendFormat": "{{process}} @ {{pod}}", "refId": "A" }
       ],
-      "title": "DNS events by process",
+      "title": "DNS events by process + pod (pinpoint which pod has which process)",
       "type": "timeseries"
     }
   ],
