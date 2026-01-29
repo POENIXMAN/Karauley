@@ -97,6 +97,10 @@ spec:
               value: "/host/proc"
             - name: METRICS_PORT
               value: "{{ .Values.service.port }}"
+            {{- if .Values.daemonset.debugPodResolution }}
+            - name: DEBUG_POD_RESOLUTION
+              value: "1"
+            {{- end }}
           
           # Resource limits
           resources:

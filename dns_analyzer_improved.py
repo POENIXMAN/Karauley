@@ -123,6 +123,21 @@ CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
+# ===== DEBUG POD RESOLUTION =====
+# Set DEBUG_POD_RESOLUTION=1 to log pid, cgroup path, and resolved pod (to stderr). Helps debug "always dns-monitor".
+DEBUG_POD_RESOLUTION = os.environ.get("DEBUG_POD_RESOLUTION", "").lower() in ("1", "true", "yes")
+_DEBUG_POD_LOG_COUNT = [0]  # mutable so we can limit logs
+DEBUG_POD_MAX_LOGS = 80
+_DEBUG_EVENT_SAMPLE = [0]
+
+def _debug_pod(msg):
+    if not DEBUG_POD_RESOLUTION:
+        return
+    if _DEBUG_POD_LOG_COUNT[0] >= DEBUG_POD_MAX_LOGS:
+        return
+    _DEBUG_POD_LOG_COUNT[0] += 1
+    print(f"[POD_DEBUG] {msg}", file=sys.stderr, flush=True)
+
 # ===== МАППИНГ CGROUP -> POD =====
 
 class PodResolver:
@@ -199,10 +214,21 @@ class PodResolver:
         eBPF даёт host PID; нужно читать cgroup с хоста (/host/proc), иначе в контейнере
         /proc/<pid> — это процесс из нашего пода и мы всегда получаем dns-monitor.
         """
+        proc_root = os.environ.get("HOST_PROC", "/proc")
+        cgroup_path = os.path.join(proc_root, str(pid), "cgroup")
         try:
-            proc_root = os.environ.get("HOST_PROC", "/proc")
-            cgroup_path = os.path.join(proc_root, str(pid), "cgroup")
-            if not os.path.exists(cgroup_path):
+            exists = os.path.exists(cgroup_path)
+            if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] < DEBUG_POD_MAX_LOGS:
+                first_line = "n/a"
+                if exists:
+                    try:
+                        with open(cgroup_path, 'r') as f:
+                            first_line = (f.readline() or "").strip()[:120]
+                    except Exception as e:
+                        first_line = f"read_err:{e}"
+                _debug_pod(f"pid={pid} HOST_PROC={proc_root!r} path={cgroup_path!r} exists={exists} cgroup_line={first_line!r}")
+
+            if not exists:
                 return None
             
             with open(cgroup_path, 'r') as f:
@@ -220,25 +246,33 @@ class PodResolver:
                             if part.startswith('pod'):
                                 pod_uid = part[3:]  # Убираем 'pod'
                                 container_id = parts[i+1] if i+1 < len(parts) else None
-                                return {
+                                result = {
                                     'type': 'kubernetes',
                                     'pod_uid': pod_uid[:12],  # Короткий UID
                                     'container_id': container_id[:12] if container_id else None,
                                     'full_path': line.strip()
                                 }
+                                if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
+                                    _debug_pod(f"pid={pid} -> pod_uid={result['pod_uid']} container_id={result.get('container_id')}")
+                                return result
                         
                         # Docker container
                         for part in parts:
                             if len(part) == 64:  # Container ID
-                                return {
+                                result = {
                                     'type': 'docker',
                                     'container_id': part[:12],
                                     'full_path': line.strip()
                                 }
+                                if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
+                                    _debug_pod(f"pid={pid} -> container_id={result['container_id']}")
+                                return result
             
             return None
             
-        except (IOError, PermissionError):
+        except (IOError, PermissionError) as e:
+            if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] < DEBUG_POD_MAX_LOGS:
+                _debug_pod(f"pid={pid} path={cgroup_path!r} error={e}")
             return None
 
 # ===== DNS ПАРСИНГ =====
@@ -618,7 +652,12 @@ def handle_event(cpu, data, size):
             pod_str = f"pod:{pod_info['pod_uid']}"
         else:
             pod_str = f"container:{pod_info['container_id']}"
-    
+    pod_label = pod_str or "host"
+
+    if DEBUG_POD_RESOLUTION and _DEBUG_EVENT_SAMPLE[0] < 20:
+        _DEBUG_EVENT_SAMPLE[0] += 1
+        print(f"[POD_DEBUG] event sample: pid={event.pid} comm={comm!r} cgroup_id={event.cgroup_id} pod_str={pod_label!r}", file=sys.stderr, flush=True)
+
     # IP адреса
     saddr = socket.inet_ntoa(struct.pack('I', event.saddr)) if event.saddr else "0.0.0.0"
     daddr = socket.inet_ntoa(struct.pack('I', event.daddr)) if event.daddr else "0.0.0.0"
@@ -668,7 +707,6 @@ def handle_event(cpu, data, size):
             dns_domains_unique.set(len(stats['domains']))
     
     # Prometheus метрики: process+pod вместе — чтобы в Grafana видеть "какой под какой процесс"
-    pod_label = pod_str or "host"
     if FLASK_AVAILABLE:
         dns_events_by_process.labels(process=comm or "unknown", pod=pod_label).inc()
         dns_events_by_pod.labels(pod=pod_label).inc()

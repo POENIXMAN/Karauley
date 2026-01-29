@@ -48,7 +48,10 @@ daemonset:
   hostNetwork: true
   hostPID: true
   dnsPolicy: ClusterFirstWithHostNet
-  
+
+  # Debug: set to true to log pod resolution (pid, cgroup path, pod_str) to stderr; view with kubectl logs
+  debugPodResolution: true
+
   # Resource limits
   resources:
     limits:
