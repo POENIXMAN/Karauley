@@ -8,7 +8,7 @@ global:
 # Image configuration
 image:
   repository: localhost/ebpfmodule
-  tag: v1.0
+  tag: v1.3
   pullPolicy: IfNotPresent
 
 # Application name
