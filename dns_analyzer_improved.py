@@ -255,14 +255,15 @@ class PodResolver:
                                     if DEBUG_POD_RESOLUTION and _DEBUG_POD_LOG_COUNT[0] <= DEBUG_POD_MAX_LOGS:
                                         _debug_pod(f"pid={pid} -> pod_uid={result['pod_uid']} (v1) container_id={result.get('container_id')}")
                                     return result
-                        # cgroup v2 / containerd: .../kubepods-pod<uid>.slice (uid can have hyphens)
+                        # cgroup v2 / containerd: kubepods-burstable-pod<uid>.slice or kubepods-pod<uid>.slice
                         for part in parts:
-                            if part.startswith('kubepods-pod') and '.slice' in part:
-                                # e.g. kubepods-pod1a2b3c4d_abcd.slice or kubepods-pod1a2b3c4d-abcd-1234-5678.slice
-                                raw = part[12:].split('.slice')[0]  # after "kubepods-pod"
-                                # use first 12 chars for API lookup (K8s UID prefix)
-                                uid_12 = (raw.replace('_', '-')[:12]) if raw else ""
-                                if uid_12 and (uid_12[0].isalnum() or uid_12[0] in '-_'):
+                            if 'kubepods' in part and '-pod' in part and '.slice' in part:
+                                # UID = everything after last "-pod" and before ".slice"
+                                idx = part.find('-pod') + 4  # after "-pod"
+                                uid_part = part[idx:].split('.slice')[0]  # e.g. a154e59b_f4b9_473f_a75f_67b40732c377
+                                uid_part = (uid_part or "").replace('_', '-')  # K8s UID uses hyphens
+                                uid_12 = uid_part[:12] if uid_part else ""
+                                if uid_12 and uid_12[0].isalnum():
                                     result = {
                                         'type': 'kubernetes',
                                         'pod_uid': uid_12,
