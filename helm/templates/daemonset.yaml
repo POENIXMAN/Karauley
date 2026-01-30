@@ -133,7 +133,8 @@ spec:
             type: Directory
         - name: modules
           hostPath:
-          path: /lib/modules
+            path: /lib/modules
+            type: Directory
           type: Directory
         - name: src
           hostPath:

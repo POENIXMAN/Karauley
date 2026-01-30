@@ -51,9 +51,9 @@ ENV PYTHONPATH=/opt/packages:/usr/lib/python3/dist-packages
 WORKDIR /app
 
 COPY dns_ebpf_improved.bpf.c .
-COPY dns_analyzer_improved.py .
+COPY dns_analyzer.py .
 COPY dns_monitor ./dns_monitor
 
 EXPOSE 9999
 
-ENTRYPOINT ["python3", "dns_analyzer_improved.py"]
+ENTRYPOINT ["python3", "dns_analyzer.py"]
