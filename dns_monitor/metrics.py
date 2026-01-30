@@ -15,8 +15,9 @@ if FLASK_AVAILABLE:
     dns_responses_total = Counter('dns_responses_total', 'Total DNS responses', ['protocol'])
     dns_suspicious_total = Counter('dns_suspicious_total', 'Total suspicious DNS queries', ['threat_type'])
     dns_domains_unique = Gauge('dns_domains_unique', 'Number of unique domains')
-    dns_events_by_process = Counter('dns_events_by_process', 'DNS events by process (and pod for pinpointing)', ['process', 'pod'])
-    dns_events_by_pod = Counter('dns_events_by_pod', 'DNS events by pod', ['pod'])
+    # Use client_pod (not pod) so Prometheus scrape target's "pod" label doesn't overwrite our resolved pod
+    dns_events_by_process = Counter('dns_events_by_process', 'DNS events by process and client pod', ['process', 'client_pod', 'direction'])
+    dns_events_by_pod = Counter('dns_events_by_pod', 'DNS events by client pod (traffic source)', ['client_pod', 'direction'])
     app = Flask(__name__)
 
     @app.route('/healthz')

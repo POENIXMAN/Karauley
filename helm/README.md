@@ -169,6 +169,15 @@ curl http://localhost:9999/metrics
    kubectl logs -n dns-monitor -l app.kubernetes.io/name=dns-monitor
    ```
 
+### Master vs worker nodes and Grafana
+
+eBPF sees the **local process** on each node. So:
+
+- **On worker nodes** where your app pods run (e.g. `dns-suspicious-tunnel-rate`), the monitor correctly attributes traffic to those pods (`client_pod` = `default/dns-suspicious-*`).
+- **On the master node**, DNS traffic is often handled by CoreDNS; the local process is `coredns`, so you see `client_pod` = `kube-system/coredns-...` (and possibly `default/dns-monitor-...`). This is expected: the actual client pods are visible only on the nodes where they run.
+
+Metrics use the label **`client_pod`** (the pod that generated the DNS event), not `pod`, so Prometheus does not overwrite it with the scrape target’s pod name. In Grafana you should see all traffic sources: `default/dns-suspicious-*`, `kube-system/coredns-*`, `default/dns-monitor-*`, etc. Use the dashboard panel **"DNS queries by client pod only"** to see only client-originated requests (`direction=query`), which reduces CoreDNS in the view.
+
 ### Метрики не доступны
 
 1. Проверьте, что Prometheus включен:
