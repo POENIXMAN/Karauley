@@ -97,8 +97,8 @@ spec:
               value: "/host/proc"
             - name: METRICS_PORT
               value: "{{ .Values.service.port }}"
-            {{- if .Values.daemonset.debugPodResolution }}
-            - name: DEBUG_POD_RESOLUTION
+            {{- if .Values.daemonset.devmode }}
+            - name: DEVMODE
               value: "1"
             {{- end }}
           
