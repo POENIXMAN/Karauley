@@ -1,8 +1,0 @@
-# Добавить репозиторий
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-
-# Установить Prometheus Stack
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --create-namespace

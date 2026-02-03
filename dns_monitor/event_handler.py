@@ -48,13 +48,16 @@ def handle_event(cpu, data, size):
     event = ctypes.cast(data, ctypes.POINTER(DNSEvent)).contents
 
     raw = event.dns_data
-    data_len = event.data_len or len(raw)
+    # Use only event.data_len for domain parsing: when 0 the eBPF didn't supply payload (read failed), so buffer may be zeroed/stale
+    data_len = event.data_len
     if data_len >= 12:
         domain = parse_dns_name(list(raw)[:data_len], offset=12)
     else:
         domain = None
     if not domain:
         domain = "<unparseable>"
+        if event.data_len == 0:
+            dev_log("event", "unparseable: data_len=0 (eBPF sent no payload → unique domains stay 0)")
 
     # Use at most data_len bytes; if too short for header+name+qtype, pass minimal slice so parse_dns_type doesn't read garbage
     safe_len = max(data_len, 12) if data_len else 12
