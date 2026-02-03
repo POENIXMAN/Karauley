@@ -76,6 +76,37 @@ helm uninstall dns-monitor
 | `prometheus.path` | Путь для метрик | `/metrics` |
 | `serviceMonitor.enabled` | Включить ServiceMonitor | `false` |
 
+### Metrics, labels and PromQL
+
+Exposed metrics (all under `/metrics`):
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `dns_queries_total` | Counter | `protocol` | Total DNS queries (UDP/TCP). |
+| `dns_responses_total` | Counter | `protocol` | Total DNS responses. |
+| `dns_suspicious_total` | Counter | `threat_type` | Suspicious DNS events by threat type. |
+| `dns_domains_unique` | Gauge | — | Number of unique domains seen. |
+| `dns_events_by_pod_total` | Counter | `client_pod`, `direction` | Events by traffic source pod and direction (query/response). |
+| `dns_events_by_process_total` | Counter | `process`, `client_pod`, `direction` | Events by process name and client pod. |
+
+**Labels we use (only what you need):**
+
+- **`client_pod`** — Pod that generated the DNS event (traffic source), e.g. `default/my-app` or `kube-system/coredns-...`. Resolved from cgroup/Kubernetes; we avoid the name `pod` so Prometheus scrape target labels do not overwrite it.
+- **`direction`** — `query` (client sent) or `response` (server sent). Use `direction="query"` in PromQL to see who made the request.
+- **`protocol`**, **`threat_type`**, **`process`** — As in the table above.
+
+The ServiceMonitor is configured with `metricRelabelings` to **drop** the labels `pod` and `exported_pod` from scraped metrics. So you only see `client_pod` for “which pod”; there is no duplicate or `exported_pod` from earlier conflicts.
+
+**PromQL used in the dashboard:**
+
+- `sum(rate(dns_queries_total[5m])) by (protocol)` — Query rate by protocol.
+- `sum(rate(dns_responses_total[5m])) by (protocol)` — Response rate by protocol.
+- `sum(rate(dns_suspicious_total[5m])) by (threat_type)` — Suspicious rate by threat type.
+- `sum(dns_domains_unique)` — Unique domains (gauge, summed across instances).
+- `sum(rate(dns_events_by_pod_total[5m])) by (client_pod)` — Event rate by client pod (all directions).
+- `sum(rate(dns_events_by_pod_total{direction="query"}[5m])) by (client_pod)` — Only queries (who made the request).
+- `sum(rate(dns_events_by_process_total[5m])) by (process, client_pod)` — Event rate by process and client pod.
+
 ### Конфигурация детекции
 
 Все параметры детекции настраиваются в `config` секции:

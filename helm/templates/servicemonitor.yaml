@@ -21,4 +21,8 @@ spec:
       interval: {{ .Values.serviceMonitor.interval }}
       path: {{ .Values.prometheus.path }}
       scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+      metricRelabelings:
+        # Drop target's "pod" and any "exported_pod" so only our client_pod label is used for traffic source
+        - regex: ^(pod|exported_pod)$
+          action: labeldrop
 {{- end }}

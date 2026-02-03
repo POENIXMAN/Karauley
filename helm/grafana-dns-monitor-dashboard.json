@@ -1,5 +1,6 @@
 {
   "annotations": { "list": [] },
+  "description": "eBPF DNS monitor. Labels: client_pod = pod that generated the DNS event (traffic source). direction = query|response. Prometheus drops pod/exported_pod via metricRelabelings so only client_pod is used.",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -14,9 +15,9 @@
       "id": 1,
       "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
       "targets": [
-        { "expr": "sum(rate(dns_queries_total[5m])) by (protocol, direction)", "legendFormat": "{{protocol}} {{direction}}", "refId": "A" }
+        { "expr": "sum(rate(dns_queries_total[5m])) by (protocol)", "legendFormat": "{{protocol}}", "refId": "A" }
       ],
-      "title": "DNS queries rate (by protocol & direction)",
+      "title": "DNS queries rate (by protocol)",
       "type": "timeseries"
     },
     {

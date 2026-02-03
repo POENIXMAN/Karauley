@@ -105,7 +105,7 @@ def handle_event(cpu, data, size):
         else:
             stats['udp_queries'] += 1
             if metrics.FLASK_AVAILABLE:
-                metrics.dns_queries_total.labels(protocol='UDP', direction='query').inc()
+                metrics.dns_queries_total.labels(protocol='UDP').inc()
     else:
         if is_response:
             stats['tcp_responses'] += 1
@@ -114,15 +114,14 @@ def handle_event(cpu, data, size):
         else:
             stats['tcp_queries'] += 1
             if metrics.FLASK_AVAILABLE:
-                metrics.dns_queries_total.labels(protocol='TCP', direction='query').inc()
+                metrics.dns_queries_total.labels(protocol='TCP').inc()
 
     if domain and not domain.startswith("<"):
         stats['domains'].add(domain)
         if metrics.FLASK_AVAILABLE:
             metrics.dns_domains_unique.set(len(stats['domains']))
 
-    # direction: query = client-side (who asked), response = server-side (who answered). Filter to direction=query in Grafana to see "which pod made the request" (avoids coredns on master).
-    # client_pod = resolved pod (namespace/name); we use client_pod so Prometheus scrape target's "pod" label doesn't overwrite it.
+   
     direction_label = "query" if not is_response else "response"
     if metrics.FLASK_AVAILABLE:
         metrics.dns_events_by_process.labels(process=comm or "unknown", client_pod=pod_label, direction=direction_label).inc()
