@@ -1,6 +1,11 @@
 """Resolve process (host PID) to pod/container via cgroup. Optional K8s API for namespace/name."""
+import json
 import os
+import ssl
+import urllib.error
+import urllib.request
 
+from dns_monitor import config
 from dns_monitor.devmode import dev_log
 
 
@@ -31,27 +36,24 @@ class PodResolver:
                 return None
             with open(token_path, "r") as f:
                 token = f.read().strip()
-            import ssl
-            import urllib.request
             ca = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
             ctx = ssl.create_default_context(cafile=ca) if os.path.exists(ca) else ssl.create_default_context()
             url = f"https://{host}:{port}/api/v1/pods?limit=500"
             req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
             with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-                import json
                 data = json.loads(resp.read().decode())
             for item in data.get("items", []):
                 meta = item.get("metadata", {})
                 uid = meta.get("uid", "")
-                if uid.startswith(uid_12) or uid[:12] == uid_12:
+                if uid.startswith(uid_12):
                     ns = meta.get("namespace", "default")
                     name = meta.get("name", "")
                     result = f"{ns}/{name}"
                     self._uid_to_ns_name[uid_12] = result
                     return result
             self._uid_to_ns_name[uid_12] = None
-        except Exception:
-            pass
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError, ValueError, KeyError) as e:
+            dev_log("pod", f"K8s API resolve uid_12={uid_12!r}: {e}")
         return None
 
     def get_pod_info(self, pid, cgroup_id, netns_id):
@@ -67,14 +69,12 @@ class PodResolver:
                 ns_name = self._resolve_uid_to_namespace_name(uid)
                 if ns_name:
                     pod_info["namespace_name"] = ns_name
-        if pod_info:
-            self.cgroup_cache[cgroup_id] = pod_info
-
+        self.cgroup_cache[cgroup_id] = pod_info  # cache result (including None) to avoid repeated /proc reads
         return pod_info
 
     def _resolve_from_cgroup(self, pid):
         """Read host /proc/<pid>/cgroup to get pod/container. Use HOST_PROC."""
-        proc_root = os.environ.get("HOST_PROC", "/proc")
+        proc_root = os.environ.get(config.ENV_HOST_PROC, "/proc")
         cgroup_path = os.path.join(proc_root, str(pid), "cgroup")
         try:
             exists = os.path.exists(cgroup_path)

@@ -1,5 +1,4 @@
 """Flask + Prometheus metrics: /healthz, /ready, /metrics, start_http_server."""
-import os
 import sys
 
 try:

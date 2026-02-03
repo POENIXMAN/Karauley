@@ -45,7 +45,7 @@ def main():
         soft_s = "unlimited" if soft == -1 else f"{soft} bytes"
         hard_s = "unlimited" if hard == -1 else f"{hard} bytes"
         dev_log("bpf", f"RLIMIT_MEMLOCK: soft={soft_s}, hard={hard_s}")
-        if not devmode:
+        if devmode:
             print(f"\n[DEBUG] RLIMIT_MEMLOCK: soft={soft_s}, hard={hard_s}")
     except (ValueError, OSError, AttributeError) as e:
         dev_log("bpf", f"RLIMIT_MEMLOCK: N/A ({e})")

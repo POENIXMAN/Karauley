@@ -2,7 +2,6 @@
 import ctypes
 import socket
 import struct
-import sys
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -57,7 +56,9 @@ def handle_event(cpu, data, size):
     if not domain:
         domain = "<unparseable>"
 
-    dns_payload = list(raw)[:data_len] if data_len else list(raw)
+    # Use at most data_len bytes; if too short for header+name+qtype, pass minimal slice so parse_dns_type doesn't read garbage
+    safe_len = max(data_len, 12) if data_len else 12
+    dns_payload = list(raw)[:min(safe_len, len(raw))]
     dns_type = parse_dns_type(dns_payload)
     dns_type_name = get_dns_type_name(dns_type)
 
@@ -138,10 +139,10 @@ def handle_event(cpu, data, size):
     is_suspicious, threat_type, threat_reasons = tunnel_detector.analyze(event_data)
     entropy = calculate_entropy(domain.replace('.', ''))
 
+    threat_label = (threat_type or "UNKNOWN") if is_suspicious else None
     if is_suspicious:
         stats['suspicious'] += 1
         if metrics.FLASK_AVAILABLE:
-            threat_label = threat_type if threat_type else 'UNKNOWN'
             metrics.dns_suspicious_total.labels(threat_type=threat_label).inc()
 
     color = RED if is_suspicious else (BLUE if is_response else GREEN)
@@ -157,8 +158,7 @@ def handle_event(cpu, data, size):
           f"{dns_type_name:>5} | {domain}")
 
     if is_suspicious:
-        threat_label = f"[{threat_type}]" if threat_type else ""
-        print(f"         {RED}⚠ SUSPICIOUS {threat_label}: {', '.join(threat_reasons)}{RESET}")
+        print(f"         {RED}⚠ SUSPICIOUS [{threat_label}]: {', '.join(threat_reasons)}{RESET}")
         print(f"         {YELLOW}   IP: {ip_info} | Entropy: {entropy:.2f} | Flags: 0x{dns_flags:04x}{RESET}")
 
 

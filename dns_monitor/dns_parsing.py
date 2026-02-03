@@ -1,6 +1,5 @@
 """DNS payload parsing: domain name, type, entropy."""
 import math
-import re
 from collections import defaultdict
 
 
