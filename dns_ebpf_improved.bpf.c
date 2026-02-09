@@ -87,6 +87,16 @@ struct dns_event {
 // с Ring Buffer часто помогает (требует ядро 4.4+).
 BPF_PERF_OUTPUT(events);
 
+// Debug: failure reason counters for container logs (Python reads via bpf["ebpf_debug_fail"]).
+// Reason codes: 1=udp_send iter_read_fail, 2=udp_send data_ptr_null, 3=udp_send probe_read_fail,
+//               4=udp_recv no_ptr, 5=udp_recv probe_read_fail
+#define EBPF_DEBUG_UDP_SEND_ITER_FAIL  1
+#define EBPF_DEBUG_UDP_SEND_PTR_NULL  2
+#define EBPF_DEBUG_UDP_SEND_READ_FAIL 3
+#define EBPF_DEBUG_UDP_RECV_NO_PTR    4
+#define EBPF_DEBUG_UDP_RECV_READ_FAIL 5
+BPF_ARRAY(ebpf_debug_fail, u64, 8);
+
 // Map для сохранения контекста между kprobe и kretprobe
 struct recv_context {
     void *data_ptr;
@@ -256,6 +266,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     
     if (ret != 0) {
         event.data_len = 0;
+        ebpf_debug_fail.increment(EBPF_DEBUG_UDP_SEND_ITER_FAIL);
         events.perf_submit(ctx, &event, sizeof(event));
         return 0;
     }
@@ -271,9 +282,11 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
             parse_dns_header(event.dns_data, event.data_len, &event);
         } else {
             event.data_len = 0;
+            ebpf_debug_fail.increment(EBPF_DEBUG_UDP_SEND_READ_FAIL);
         }
     } else {
         event.data_len = 0;
+        ebpf_debug_fail.increment(EBPF_DEBUG_UDP_SEND_PTR_NULL);
     }
     
     // Отправляем ВСЕ DNS события в userspace
@@ -316,6 +329,10 @@ int kprobe__udp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
         rctx.data_ptr = get_data_ptr_from_iter(&iter);
     } else {
         rctx.data_ptr = NULL;
+        ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_NO_PTR);
+    }
+    if (!rctx.data_ptr && ret == 0) {
+        ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_NO_PTR);
     }
     
     recv_ctx_map.update(&pid_tgid, &rctx);
@@ -327,6 +344,9 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
     
     struct recv_context *rctx = recv_ctx_map.lookup(&pid_tgid);
     if (!rctx || !rctx->data_ptr) {
+        if (rctx && !rctx->data_ptr) {
+            ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_NO_PTR);
+        }
         recv_ctx_map.delete(&pid_tgid);
         return 0;
     }
@@ -358,6 +378,7 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
         parse_dns_header(event.dns_data, event.data_len, &event);
     } else {
         event.data_len = 0;
+        ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_READ_FAIL);
     }
     
     recv_ctx_map.delete(&pid_tgid);

@@ -4,6 +4,7 @@ import resource
 import signal
 import sys
 import threading
+import time
 import traceback
 
 from dns_monitor import config
@@ -18,6 +19,48 @@ YELLOW = config.YELLOW
 CYAN = config.CYAN
 BOLD = config.BOLD
 RESET = config.RESET
+
+# eBPF debug failure reasons (must match dns_ebpf_improved.bpf.c EBPF_DEBUG_*)
+EBPF_DEBUG_NAMES = {
+    1: "udp_send_iter_read_fail",
+    2: "udp_send_data_ptr_null",
+    3: "udp_send_probe_read_fail",
+    4: "udp_recv_no_ptr",
+    5: "udp_recv_probe_read_fail",
+}
+
+
+def log_ebpf_debug_counts(bpf):
+    """Read eBPF debug failure map and log to stderr (shows in container logs)."""
+    try:
+        tbl = bpf["ebpf_debug_fail"]
+        parts = []
+        for i in range(1, 6):
+            try:
+                v = tbl[i]
+                count = getattr(v, "value", v)
+                if count is None:
+                    count = 0
+                else:
+                    count = int(count)
+            except Exception:
+                count = 0
+            if count > 0:
+                name = EBPF_DEBUG_NAMES.get(i, f"reason_{i}")
+                parts.append(f"{name}={count}")
+        if parts:
+            print(f"[eBPF debug] data_len=0 failures: {', '.join(parts)}", file=sys.stderr, flush=True)
+    except KeyError:
+        pass  # map not present (old eBPF object)
+    except Exception as e:
+        dev_log("bpf", f"ebpf_debug_fail read: {e}")
+
+
+def _ebpf_debug_loop(bpf_obj, interval_sec):
+    """Daemon thread: log eBPF failure counts every interval_sec."""
+    while True:
+        time.sleep(interval_sec)
+        log_ebpf_debug_counts(bpf_obj)
 
 
 def signal_handler(sig, frame):
@@ -76,6 +119,17 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
     print(f"[*] Используется Perf Buffer")
+    # Log eBPF failure reasons to stderr every 30s (visible in container logs when data_len=0)
+    try:
+        debug_thread = threading.Thread(
+            target=_ebpf_debug_loop,
+            args=(bpf, 30),
+            daemon=True,
+            name='eBPF-debug',
+        )
+        debug_thread.start()
+    except Exception:
+        pass
     print("-" * 80)
 
     while True:
