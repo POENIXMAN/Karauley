@@ -96,13 +96,39 @@ def handle_event(cpu, data, size):
 
     # Parse domain from payload
     domain = None
+    dns_payload = list(raw)[:data_len] if data_len else []
+    
+    # DEBUG: dump first 32 bytes of DNS payload
+    if data_len > 0 and data_len < 300:
+        hex_dump = ' '.join(f'{b:02x}' for b in dns_payload[:min(32, data_len)])
+        # Verify dns_id from struct matches first 2 bytes of dns_data
+        if len(dns_payload) >= 2:
+            dns_id_from_data = (dns_payload[0] << 8) | dns_payload[1]
+            match = "MATCH" if dns_id_from_data == event.dns_id else f"MISMATCH(struct={event.dns_id:04x})"
+            dev_log("dns_hex", f"data_len={data_len} dns_id={match} hex: {hex_dump}")
+        else:
+            dev_log("dns_hex", f"data_len={data_len} hex: {hex_dump}")
+    
     if data_len >= 12:
-        domain = parse_dns_name(list(raw)[:data_len], offset=12)
+        domain = parse_dns_name(dns_payload, offset=12)
+        if not domain:
+            # More debug: show byte at offset 12 and reason
+            if data_len > 16:
+                b12 = dns_payload[12]
+                reason = ""
+                if b12 == 0:
+                    reason = "null_terminator"
+                elif b12 > 63 and (b12 & 0xC0) != 0xC0:
+                    reason = f"invalid_label_len({b12})"
+                elif (b12 & 0xC0) == 0xC0:
+                    ptr = ((b12 & 0x3F) << 8) | dns_payload[13] if data_len > 13 else 0
+                    reason = f"compression_ptr_to_{ptr}"
+                else:
+                    reason = f"label_len={b12}"
+                dev_log("dns_parse", f"parse failed: byte[12]=0x{b12:02x} ({reason}), bytes[12:20]={dns_payload[12:20]}")
 
     # Parse DNS type
-    safe_len = max(data_len, 12) if data_len else 12
-    dns_payload = list(raw)[:min(safe_len, len(raw))]
-    dns_type = parse_dns_type(dns_payload)
+    dns_type = parse_dns_type(dns_payload) if dns_payload else 1
 
     # Query/Response correlation:
     # - Query with valid domain → cache it
