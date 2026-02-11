@@ -20,40 +20,83 @@ CYAN = config.CYAN
 BOLD = config.BOLD
 RESET = config.RESET
 
-# eBPF debug failure reasons (must match dns_ebpf_improved.bpf.c EBPF_DEBUG_*)
+# eBPF debug: must match dns_ebpf_improved.bpf.c EBPF_DEBUG_*
 EBPF_DEBUG_NAMES = {
     1: "udp_send_iter_read_fail",
     2: "udp_send_data_ptr_null",
     3: "udp_send_probe_read_fail",
     4: "udp_recv_no_ptr",
     5: "udp_recv_probe_read_fail",
+    6: "union_primary_ok",
+    7: "union_fallback_ok",
+}
+# iov_iter type names (linux/uio.h)
+ITER_TYPE_NAMES = {
+    0: "UBUF",
+    1: "IOVEC",
+    2: "KVEC",
+    3: "BVEC",
+    4: "PIPE",
+    5: "DISCARD",
+    6: "XARRAY",
+    8: "UBUF",   # sometimes 8 used
 }
 
 
-def log_ebpf_debug_counts(bpf):
-    """Read eBPF debug failure map and log to stderr (shows in container logs)."""
+def _read_count(tbl, idx):
     try:
+        v = tbl[idx]
+        count = getattr(v, "value", v)
+        return 0 if count is None else int(count)
+    except Exception:
+        return 0
+
+
+def log_ebpf_debug_counts(bpf):
+    """Read all eBPF debug maps and log to stderr (container logs)."""
+    lines = []
+    try:
+        # 1) Failures and union success
         tbl = bpf["ebpf_debug_fail"]
-        parts = []
-        for i in range(1, 6):
-            try:
-                v = tbl[i]
-                count = getattr(v, "value", v)
-                if count is None:
-                    count = 0
-                else:
-                    count = int(count)
-            except Exception:
-                count = 0
-            if count > 0:
-                name = EBPF_DEBUG_NAMES.get(i, f"reason_{i}")
-                parts.append(f"{name}={count}")
-        if parts:
-            print(f"[eBPF debug] data_len=0 failures: {', '.join(parts)}", file=sys.stderr, flush=True)
+        fail_parts = []
+        for i in range(1, 8):
+            c = _read_count(tbl, i)
+            if c > 0:
+                name = EBPF_DEBUG_NAMES.get(i, f"slot_{i}")
+                fail_parts.append(f"{name}={c}")
+        if fail_parts:
+            lines.append("[eBPF debug] fail/ok: " + ", ".join(fail_parts))
+
+        # 2) iter_type distribution
+        try:
+            it_tbl = bpf["ebpf_debug_iter_type"]
+            it_parts = []
+            for i in range(16):
+                c = _read_count(it_tbl, i)
+                if c > 0:
+                    name = ITER_TYPE_NAMES.get(i, f"type{i}")
+                    it_parts.append(f"{name}={c}")
+            if it_parts:
+                lines.append("[eBPF debug] iter_type: " + ", ".join(it_parts))
+        except KeyError:
+            pass
+
+        # 3) read method: user_ok vs kernel_ok
+        try:
+            rd_tbl = bpf["ebpf_debug_read"]
+            u_ok = _read_count(rd_tbl, 0)
+            k_ok = _read_count(rd_tbl, 1)
+            if u_ok > 0 or k_ok > 0:
+                lines.append(f"[eBPF debug] read: user_ok={u_ok}, kernel_ok={k_ok}")
+        except KeyError:
+            pass
+
+        for line in lines:
+            print(line, file=sys.stderr, flush=True)
     except KeyError:
-        pass  # map not present (old eBPF object)
+        pass  # old eBPF object
     except Exception as e:
-        dev_log("bpf", f"ebpf_debug_fail read: {e}")
+        dev_log("bpf", f"ebpf_debug read: {e}")
 
 
 def _ebpf_debug_loop(bpf_obj, interval_sec):

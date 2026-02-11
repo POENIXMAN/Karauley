@@ -18,9 +18,16 @@ So you can see **which** failure path is taken without mounting `trace_pipe` or 
 |--------|---------|
 | `udp_send_iter_read_fail` | `bpf_probe_read_kernel(&iter, ...)` failed in `udp_sendmsg` |
 | `udp_send_data_ptr_null` | `get_data_ptr_from_iter()` returned NULL in `udp_sendmsg` (iter type/layout) |
-| `udp_send_probe_read_fail` | `bpf_probe_read_user(dns_data, ...)` failed in `udp_sendmsg` |
+| `udp_send_probe_read_fail` | `bpf_probe_read_user` + `bpf_probe_read_kernel` both failed in `udp_sendmsg` |
 | `udp_recv_no_ptr` | No data pointer in `udp_recvmsg` (kprobe or get_data_ptr failed) |
-| `udp_recv_probe_read_fail` | `bpf_probe_read_user` failed in `udp_recvmsg` kretprobe |
+| `udp_recv_probe_read_fail` | Both reads failed in `udp_recvmsg` kretprobe |
+| `union_primary_ok` | Data pointer obtained from iov_iter union at offset 24 |
+| `union_fallback_ok` | Data pointer obtained from iov_iter union at offset 16 |
+
+Additional debug (printed when non-zero):
+
+- **iter_type** — distribution of `iov_iter.iter_type`: UBUF=0, IOVEC=1, KVEC=2, BVEC=3, etc. If you see only type 2 or 8 and no union_primary_ok/union_fallback_ok, the union layout is wrong for that type.
+- **read: user_ok=…, kernel_ok=…** — how many payload reads succeeded via user vs kernel. If both are 0 but union_*_ok > 0, the pointer is valid but not readable (wrong space or page not present).
 
 ## What to do
 
@@ -81,3 +88,35 @@ Below are the main hypotheses, in order of likelihood. The **eBPF debug counters
    - adjust `IOV_ITER_*` offsets for that kernel, or
    - add handling for the actual `iter_type` you see (e.g. log it first, then add a branch).
 3. If it’s **`*_probe_read_fail`**: pointer is non-NULL but read fails (e.g. page/address issue); then consider namespace/timing (hypotheses #3–5).
+
+---
+
+## Теория: где почитать
+
+### eBPF: probe_read_user vs probe_read_kernel
+
+- **Kernel docs (официально):**  
+  https://docs.kernel.org/bpf/helpers.html  
+  Раздел «Reading kernel memory»: `bpf_probe_read_user()` — только user-space; `bpf_probe_read_kernel()` — только kernel memory. Чтение не из того адресного пространства даёт ошибку.
+- **Почему в контейнерах фейлится user read:** данные в буфере сокета могут быть уже в kernel (skb, splice, другой путь). Указатель из `iov_iter` тогда указывает на kernel memory → `bpf_probe_read_user` возвращает ошибку.
+
+### struct iov_iter и типы итератора
+
+- **Исходники ядра:**  
+  `include/linux/uio.h` — определение `struct iov_iter`, типы `ITER_UBUF`, `ITER_IOVEC`, `ITER_KVEC`, `ITER_BVEC` и т.д.  
+  Онлайн: https://elixir.bootlin.com/linux/latest/source/include/linux/uio.h
+- **Как устроен iov_iter:**  
+  LWN — «The iov_iter interface»: https://lwn.net/Articles/625077/  
+  Плюс обновления по ядру (поиск «iov_iter» на lwn.net).
+
+### Трассировка сетей в ядре с eBPF (на русском)
+
+- **Ковалев М.Г.** Трассировка сетевых пакетов в ядре Linux с использованием eBPF // Труды ИСП РАН. 2020. Т. 32, вып. 3. С. 71–78.  
+  Файл в проекте: `статьи/trassirovka-setevyh-paketov-v-yadre-linux-s-ispolzovaniem-ebpf.pdf`  
+  Кратко про BPF/eBPF, виртуальная машина, трассировка пакетов в сетевом стеке.
+
+### Книги и туториалы по eBPF
+
+- **BPF Performance Tools** (Brendan Gregg) — главы про трассировку и чтение памяти из eBPF.
+- **Cilium eBPF docs:** https://docs.cilium.io/en/stable/bpf/ — общая модель eBPF, меньше про `probe_read_*`.
+- **BCC reference:** https://github.com/iovisor/bcc/blob/master/docs/reference_guide.md — контекст вызовов из Python, какие хелперы доступны.

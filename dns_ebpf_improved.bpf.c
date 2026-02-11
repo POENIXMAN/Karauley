@@ -90,12 +90,21 @@ BPF_PERF_OUTPUT(events);
 // Debug: failure reason counters for container logs (Python reads via bpf["ebpf_debug_fail"]).
 // Reason codes: 1=udp_send iter_read_fail, 2=udp_send data_ptr_null, 3=udp_send probe_read_fail,
 //               4=udp_recv no_ptr, 5=udp_recv probe_read_fail
+//               6=union_primary_ok (offset 24), 7=union_fallback_ok (offset 16)
 #define EBPF_DEBUG_UDP_SEND_ITER_FAIL  1
 #define EBPF_DEBUG_UDP_SEND_PTR_NULL  2
 #define EBPF_DEBUG_UDP_SEND_READ_FAIL 3
 #define EBPF_DEBUG_UDP_RECV_NO_PTR    4
 #define EBPF_DEBUG_UDP_RECV_READ_FAIL 5
-BPF_ARRAY(ebpf_debug_fail, u64, 8);
+#define EBPF_DEBUG_UNION_PRIMARY_OK   6
+#define EBPF_DEBUG_UNION_FALLBACK_OK  7
+BPF_ARRAY(ebpf_debug_fail, u64, 16);
+
+// Debug: distribution of iov_iter.iter_type (0=ITER_UBUF, 1=ITER_IOVEC, 2=ITER_KVEC, ...)
+BPF_ARRAY(ebpf_debug_iter_type, u64, 16);
+
+// Debug: which read succeeded — 0=user_ok, 1=kernel_ok
+BPF_ARRAY(ebpf_debug_read, u64, 4);
 
 // Map для сохранения контекста между kprobe и kretprobe
 struct recv_context {
@@ -170,7 +179,7 @@ static __always_inline void parse_dns_header(u8 *data, u16 data_len, struct dns_
         event->dns_answers = (data[6] << 8) | data[7];
     }
 
-// Константы iter_type из include/linux/uio.h (5.15+)
+// Константы iter_type из include/linux/uio.h (могут отличаться между ядрами)
 #ifndef ITER_UBUF
 #define ITER_UBUF 0
 #endif
@@ -180,11 +189,51 @@ static __always_inline void parse_dns_header(u8 *data, u16 data_len, struct dns_
 
 // Получение указателя на данные из iov_iter.
 // Совместимость: рассчитано на ядро 5.15+ (layout из mainline uio.h).
-// В 5.15+ ubuf/__iov во вложенной анонимной union — используем смещения.
-// Смещения: iter_type=0; union после iter_type,nofault,data_source,iov_offset → 16.
-// На 6.x layout может совпадать; при сбоях на новых ядрах проверьте offsetof(struct iov_iter).
+// В разных ядрах layout может отличаться, поэтому пробуем несколько смещений.
+// Часто встречается:
+// - iter_type: 0
+// - iov_offset: 8
+// - union (__iov/__kvec/__ubuf_iovec): 24
+// В старых/иных сборках union может оказаться на 16.
 #define IOV_ITER_ITER_TYPE_OFF  0
-#define IOV_ITER_UNION_OFF      16
+#define IOV_ITER_IOV_OFFSET_OFF 8
+#define IOV_ITER_UNION_OFF_PRIMARY   24
+#define IOV_ITER_UNION_OFF_FALLBACK  16
+
+static __always_inline void *extract_data_ptr_from_iter_union(struct iov_iter *iter, u8 iter_type, int union_off) {
+    void *data_ptr = NULL;
+    long ret;
+
+    if (iter_type == ITER_UBUF) {
+        // struct iovec __ubuf_iovec; iov_base — первое поле
+        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iter + union_off);
+        return (ret == 0) ? data_ptr : NULL;
+    }
+
+    if (iter_type == ITER_IOVEC) {
+        const struct iovec *iov = NULL;
+        ret = bpf_probe_read_kernel(&iov, sizeof(iov), (void *)iter + union_off);
+        if (ret != 0 || !iov) {
+            return NULL;
+        }
+        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iov);
+        return (ret == 0) ? data_ptr : NULL;
+    }
+
+    // ITER_KVEC встречается в части путей ядра/контейнерной сети.
+    // На разных версиях/конфигурациях может быть 2 или 8.
+    if (iter_type == 2 || iter_type == 8) {
+        const struct kvec *kv = NULL;
+        ret = bpf_probe_read_kernel(&kv, sizeof(kv), (void *)iter + union_off);
+        if (ret != 0 || !kv) {
+            return NULL;
+        }
+        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)kv);
+        return (ret == 0) ? data_ptr : NULL;
+    }
+
+    return NULL;
+}
 
 static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
     if (!iter) {
@@ -193,51 +242,46 @@ static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
     
     void *data_ptr = NULL;
     u8 iter_type = 0;
+    u64 iov_offset = 0;
     long ret;
     
     ret = bpf_probe_read_kernel(&iter_type, sizeof(iter_type), (void *)iter + IOV_ITER_ITER_TYPE_OFF);
     if (ret != 0) {
         return NULL;
     }
-    
-    if (iter_type == ITER_UBUF) {
-        // Один буфер: в union лежит struct iovec __ubuf_iovec, iov_base в начале
-        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iter + IOV_ITER_UNION_OFF);
-        return (ret == 0) ? data_ptr : NULL;
+
+    // Debug: распределение iter_type (0=UBUF, 1=IOVEC, 2=KVEC, …)
+    u32 it_key = (u32)(iter_type & 0xf);
+    ebpf_debug_iter_type.increment(it_key);
+
+    // iov_offset сдвигает текущую позицию внутри iovec/kvec/ubuf
+    bpf_probe_read_kernel(&iov_offset, sizeof(iov_offset), (void *)iter + IOV_ITER_IOV_OFFSET_OFF);
+
+    // Сначала пробуем union на 24, затем на 16
+    data_ptr = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_PRIMARY);
+    if (data_ptr) {
+        ebpf_debug_fail.increment(EBPF_DEBUG_UNION_PRIMARY_OK);
+        return (void *)((char *)data_ptr + iov_offset);
     }
-    
-    if (iter_type == ITER_IOVEC) {
-        // Массив iovec: в union лежит указатель __iov на const struct iovec*
-        const struct iovec *iov = NULL;
-        ret = bpf_probe_read_kernel(&iov, sizeof(iov), (void *)iter + IOV_ITER_UNION_OFF);
-        if (ret != 0 || !iov) {
-            return NULL;
-        }
-        // iov_base — первое поле struct iovec, читаем по указателю iov
-        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)iov);
-        return (ret == 0) ? data_ptr : NULL;
+    data_ptr = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_FALLBACK);
+    if (data_ptr) {
+        ebpf_debug_fail.increment(EBPF_DEBUG_UNION_FALLBACK_OK);
+        return (void *)((char *)data_ptr + iov_offset);
     }
-    
-    // ITER_KVEC — kernel vector (в контейнерах часто используется)
-    if (iter_type == 2) { // ITER_KVEC = 2
-        const struct kvec *kv = NULL;
-        ret = bpf_probe_read_kernel(&kv, sizeof(kv), (void *)iter + IOV_ITER_UNION_OFF);
-        if (ret != 0 || !kv) {
-            return NULL;
-        }
-        ret = bpf_probe_read_kernel(&data_ptr, sizeof(data_ptr), (void *)kv);
-        return (ret == 0) ? data_ptr : NULL;
-    }
-    
+
     return NULL;
 }
 
 // Helper: try user read first, fallback to kernel read
 static __always_inline long try_read_data(void *dst, u32 size, void *src) {
     long ret = bpf_probe_read_user(dst, size, src);
-    if (ret != 0) {
-        // Fallback: данные могут быть в kernel memory (контейнеры, splice, etc)
-        ret = bpf_probe_read_kernel(dst, size, src);
+    if (ret == 0) {
+        ebpf_debug_read.increment(0);  // user_read_ok
+        return 0;
+    }
+    ret = bpf_probe_read_kernel(dst, size, src);
+    if (ret == 0) {
+        ebpf_debug_read.increment(1);  // kernel_read_ok
     }
     return ret;
 }
