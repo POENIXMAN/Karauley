@@ -50,7 +50,7 @@ ENV PYTHONPATH=/opt/packages:/usr/lib/python3/dist-packages
 
 WORKDIR /app
 
-COPY dns_ebpf_improved.bpf.c dns_ebpf_common.h dns_ebpf_udp.inc dns_ebpf_tcp.inc .
+COPY dns_ebpf_improved.bpf.c .
 COPY dns_analyzer.py .
 COPY dns_monitor ./dns_monitor
 
