@@ -41,6 +41,49 @@ stats = {
 
 pod_resolver = PodResolver()
 
+# === Query/Response correlation ===
+# Key: (dns_id, saddr, daddr) → (domain, dns_type, timestamp)
+# Used to resolve compressed names in responses
+_query_cache = {}
+_QUERY_CACHE_TTL = 10.0  # seconds
+_QUERY_CACHE_MAX = 10000
+
+
+def _cache_cleanup():
+    """Remove expired entries from query cache."""
+    global _query_cache
+    now = time.time()
+    expired = [k for k, v in _query_cache.items() if now - v[2] > _QUERY_CACHE_TTL]
+    for k in expired:
+        del _query_cache[k]
+    # Limit size
+    if len(_query_cache) > _QUERY_CACHE_MAX:
+        # Remove oldest half
+        sorted_keys = sorted(_query_cache.keys(), key=lambda k: _query_cache[k][2])
+        for k in sorted_keys[:len(sorted_keys)//2]:
+            del _query_cache[k]
+
+
+def _cache_query(dns_id, saddr, daddr, domain, dns_type):
+    """Store query domain for later response correlation."""
+    if domain and not domain.startswith("<"):
+        key = (dns_id, saddr, daddr)
+        _query_cache[key] = (domain, dns_type, time.time())
+        if len(_query_cache) % 100 == 0:
+            _cache_cleanup()
+
+
+def _lookup_query(dns_id, saddr, daddr):
+    """Look up domain from cached query (for response correlation)."""
+    # Response: saddr/daddr are swapped vs query
+    key = (dns_id, daddr, saddr)
+    entry = _query_cache.get(key)
+    if entry:
+        domain, dns_type, ts = entry
+        if time.time() - ts < _QUERY_CACHE_TTL:
+            return domain, dns_type
+    return None, None
+
 
 def handle_event(cpu, data, size):
     """Process one eBPF event (Perf Buffer)."""
@@ -48,24 +91,39 @@ def handle_event(cpu, data, size):
     event = ctypes.cast(data, ctypes.POINTER(DNSEvent)).contents
 
     raw = event.dns_data
-    # Use only event.data_len for domain parsing: when 0 the eBPF didn't supply payload (read failed), so buffer may be zeroed/stale
     data_len = event.data_len
+    is_response = (event.direction == 2)
+
+    # Parse domain from payload
+    domain = None
     if data_len >= 12:
         domain = parse_dns_name(list(raw)[:data_len], offset=12)
-    else:
-        domain = None
-    if not domain:
-        domain = "<unparseable>"
-        if event.data_len == 0:
-            dev_log("event", "unparseable: data_len=0 (eBPF sent no payload → unique domains stay 0)")
 
-    # Use at most data_len bytes; if too short for header+name+qtype, pass minimal slice so parse_dns_type doesn't read garbage
+    # Parse DNS type
     safe_len = max(data_len, 12) if data_len else 12
     dns_payload = list(raw)[:min(safe_len, len(raw))]
     dns_type = parse_dns_type(dns_payload)
+
+    # Query/Response correlation:
+    # - Query with valid domain → cache it
+    # - Response with unparseable domain → look up from cache
+    if not is_response and domain and not domain.startswith("<"):
+        _cache_query(event.dns_id, event.saddr, event.daddr, domain, dns_type)
+    elif is_response and not domain:
+        cached_domain, cached_type = _lookup_query(event.dns_id, event.saddr, event.daddr)
+        if cached_domain:
+            domain = cached_domain
+            if dns_type == 1 and cached_type:  # default type, use cached
+                dns_type = cached_type
+            dev_log("event", f"response domain from cache: {domain}")
+
+    if not domain:
+        domain = "<unparseable>"
+        if data_len == 0:
+            dev_log("event", "unparseable: data_len=0 (eBPF sent no payload)")
+
     dns_type_name = get_dns_type_name(dns_type)
 
-    is_response = (event.direction == 2)
     direction = "RESPONSE" if is_response else "QUERY"
     protocol = "TCP" if event.protocol == 6 else "UDP"
     comm = event.comm.decode('utf-8', errors='ignore').rstrip('\x00')

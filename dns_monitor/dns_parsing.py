@@ -4,7 +4,9 @@ from collections import defaultdict
 
 
 def parse_dns_name(data, offset=12):
-    """Parse DNS name with compression pointer support."""
+    """Parse DNS name with compression pointer support.
+    Only follow pointers to earlier offsets (pointer < i) to avoid cycles
+    (e.g. response with 0xc0 0x0c at 12 pointing to self)."""
     labels = []
     i = offset
     max_jumps = 10
@@ -17,7 +19,9 @@ def parse_dns_name(data, offset=12):
             if i + 1 >= len(data):
                 break
             pointer = ((length & 0x3F) << 8) | data[i + 1]
-            if pointer < len(data):
+            # Follow only if pointer is to an earlier offset (RFC 1035; avoid self-reference)
+            if pointer < i and pointer < len(data):
+                jumps += 1
                 sub_labels = parse_dns_name(data, pointer)
                 if sub_labels:
                     labels.extend(sub_labels.split('.'))
@@ -44,7 +48,8 @@ def get_dns_type_name(qtype):
 
 
 def parse_dns_type(data):
-    """Extract QTYPE from DNS payload (after header + name)."""
+    """Extract QTYPE from DNS payload (after header + name).
+    When name is compressed (0xc0 0x0c at 12), QTYPE is at 14-15."""
     i = 12
     while i < len(data) and data[i] != 0:
         length = data[i]
@@ -57,7 +62,7 @@ def parse_dns_type(data):
 
     if i + 2 <= len(data):
         qtype = (data[i] << 8) | data[i + 1]
-        return qtype
+        return qtype if qtype else 1
     return 1
 
 
