@@ -1,4 +1,5 @@
 """Load BPF program: read source, compile, open perf buffer."""
+import os
 import sys
 import traceback
 
@@ -14,7 +15,8 @@ def load_bpf(handle_event_cb):
     handle_event_cb(cpu, data, size) is called for each event.
     """
     bpf_path = config.BPF_SOURCE_FILE
-    dev_log("bpf", f"Loading eBPF from {bpf_path}")
+    bpf_dir = os.path.dirname(os.path.abspath(bpf_path))
+    dev_log("bpf", f"Loading eBPF from {bpf_path} (include dir: {bpf_dir})")
 
     try:
         print("[*] Шаг 1/3: чтение файла...")
@@ -29,7 +31,7 @@ def load_bpf(handle_event_cb):
 
     try:
         print("[*] Шаг 2/3: BPF(text=...) — компиляция и загрузка в ядро...")
-        bpf = BPF(text=bpf_text)
+        bpf = BPF(text=bpf_text, cflags=["-I", bpf_dir])
         print("[+] Шаг 2/3: OK — eBPF программа загружена")
     except Exception as e:
         print(f"[!] Ошибка на шаге 2 (BPF load): {e}", file=sys.stderr)
