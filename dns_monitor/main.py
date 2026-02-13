@@ -30,6 +30,23 @@ EBPF_DEBUG_NAMES = {
     6: "union_primary_ok",
     7: "union_fallback_ok",
 }
+# Step-by-step pipeline (ebpf_debug_steps) — which step succeeds/fails in K8s
+STEP_NAMES = {
+    0: "send_iter_ok",
+    1: "send_ptr_ok",
+    2: "send_ptr_null",
+    3: "ptr_primary_probe_ok",
+    4: "ptr_fallback_probe_ok",
+    5: "send_read_user_ok",
+    6: "send_read_kernel_ok",
+    7: "send_read_fail",
+    8: "recv_iter_ok",
+    9: "recv_ptr_ok",
+    10: "recv_ptr_null",
+    11: "recv_read_user_ok",
+    12: "recv_read_kernel_ok",
+    13: "recv_read_fail",
+}
 # iov_iter type names (linux/uio.h)
 ITER_TYPE_NAMES = {
     0: "UBUF",
@@ -88,6 +105,19 @@ def log_ebpf_debug_counts(bpf):
             k_ok = _read_count(rd_tbl, 1)
             if u_ok > 0 or k_ok > 0:
                 lines.append(f"[eBPF debug] read: user_ok={u_ok}, kernel_ok={k_ok}")
+        except KeyError:
+            pass
+
+        # 4) Step-by-step pipeline (K8s: find exactly where it fails)
+        try:
+            step_tbl = bpf["ebpf_debug_steps"]
+            step_parts = []
+            for i in range(14):
+                c = _read_count(step_tbl, i)
+                if c > 0:
+                    step_parts.append(f"{STEP_NAMES.get(i, f'step{i}')}={c}")
+            if step_parts:
+                lines.append("[eBPF debug] steps: " + ", ".join(step_parts))
         except KeyError:
             pass
 

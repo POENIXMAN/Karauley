@@ -29,7 +29,27 @@ Additional debug (printed when non-zero):
 - **iter_type** — distribution of `iov_iter.iter_type`: UBUF=0, IOVEC=1, KVEC=2, BVEC=3, etc. If you see only type 2 or 8 and no union_primary_ok/union_fallback_ok, the union layout is wrong for that type.
 - **read: user_ok=…, kernel_ok=…** — how many payload reads succeeded via user vs kernel. If both are 0 but union_*_ok > 0, the pointer is valid but not readable (wrong space or page not present).
 
-**UBUF = user buffer:** For `iter_type == ITER_UBUF` the pointer is a **user-space** address. Using `bpf_probe_read_kernel` on it (e.g. in containers) can return garbage, so the code uses **only** `bpf_probe_read_user` for UBUF (no kernel fallback). If user read fails, we get `data_len=0` and do not show corrupted payload (e.g. byte[12]=0 and wrong domain).
+**UBUF = user buffer:** The pointer is user-space. We **prefer** `bpf_probe_read_user` (correct payload). If it fails (e.g. in container user namespace), we **fall back** to `bpf_probe_read_kernel` so we at least get `dns_id` and header (otherwise we’d see ID:0000). In that case the domain may stay unparseable until user read works in your environment.
+
+### Step-by-step pipeline (`[eBPF debug] steps:`)
+
+These counters show **at which step** the pipeline succeeds or fails (for K8s debugging):
+
+| Step | Meaning |
+|------|--------|
+| `send_iter_ok` | UDP send: read `msg_iter` from `msghdr` OK |
+| `send_ptr_ok` | UDP send: `get_data_ptr_from_iter` returned non-NULL |
+| `send_ptr_null` | UDP send: pointer NULL (union offset / iter_type mismatch) |
+| `ptr_primary_probe_ok` | Pointer validated by 2-byte probe read at union offset **24** |
+| `ptr_fallback_probe_ok` | Pointer validated by 2-byte probe read at union offset **16** |
+| `send_read_user_ok` | UDP send: `bpf_probe_read_user` (full payload) OK |
+| `send_read_kernel_ok` | UDP send: `bpf_probe_read_kernel` fallback OK |
+| `send_read_fail` | UDP send: both user and kernel read failed |
+| `recv_iter_ok` | UDP recv kprobe: iter read OK |
+| `recv_ptr_ok` / `recv_ptr_null` | UDP recv: pointer from iter |
+| `recv_read_user_ok` / `recv_read_kernel_ok` / `recv_read_fail` | UDP recv kretprobe: payload read |
+
+**How to read:** If you see `send_iter_ok` but no `send_ptr_ok` → failure at **pointer extraction** (layout/offset). If you see `send_ptr_ok` and `send_read_fail` (and no `send_read_user_ok`/`send_read_kernel_ok`) → failure at **payload read** (user/kernel space or address invalid in container).
 
 ## What to do
 
@@ -51,7 +71,16 @@ No `trace_pipe` or debugfs mount is required; everything appears in normal conta
 
 ---
 
-## Hypotheses: why it works on a VM but fails in K8s
+## Hypotheses: why it works on host but fails in K8s
+
+Use **`[eBPF debug] steps:`** to see where the pipeline stops in the cluster. Then match to one of the following.
+
+| What you see in `steps:` | Failing step | Likely hypothesis |
+|--------------------------|--------------|-------------------|
+| `send_iter_ok` but no `send_ptr_ok`, many `send_ptr_null` | Pointer extraction | **#1** Wrong `iov_iter` layout on node kernel (union at 24/16 wrong). Or **#2** iter_type not UBUF/IOVEC. |
+| `send_ptr_ok` (or `ptr_primary_probe_ok`/`ptr_fallback_probe_ok`) but no `send_read_user_ok`/`send_read_kernel_ok`, many `send_read_fail` | Payload read | **#3** User buffer not readable in container (user namespace / page not present). Kernel fallback also fails → wrong pointer or unmapped. |
+| `send_read_kernel_ok` > 0 but domains still &lt;unparseable&gt; | Data is wrong | Pointer valid but not the DNS buffer (e.g. wrong offset); or kernel returns different memory in container. |
+| `recv_*` steps: same pattern as send | Recv path | Same causes on `udp_recvmsg` (kprobe: ptr, kretprobe: read). |
 
 Below are the main hypotheses, in order of likelihood. The **eBPF debug counters** tell you which one is happening (e.g. high `udp_send_data_ptr_null` → #1 or #2).
 

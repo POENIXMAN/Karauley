@@ -106,6 +106,25 @@ BPF_ARRAY(ebpf_debug_iter_type, u64, 16);
 // Debug: which read succeeded — 0=user_ok, 1=kernel_ok
 BPF_ARRAY(ebpf_debug_read, u64, 4);
 
+// Step-by-step pipeline (K8s debug): 0=send_iter_ok, 1=send_ptr_ok, 2=send_ptr_null,
+// 3=ptr_primary_probe_ok, 4=ptr_fallback_probe_ok, 5=send_read_user_ok, 6=send_read_kernel_ok, 7=send_read_fail,
+// 8=recv_iter_ok, 9=recv_ptr_ok, 10=recv_ptr_null, 11=recv_read_user_ok, 12=recv_read_kernel_ok, 13=recv_read_fail
+#define STEP_SEND_ITER_OK      0
+#define STEP_SEND_PTR_OK       1
+#define STEP_SEND_PTR_NULL     2
+#define STEP_PTR_PRIMARY_OK    3
+#define STEP_PTR_FALLBACK_OK   4
+#define STEP_SEND_READ_USER    5
+#define STEP_SEND_READ_KERNEL  6
+#define STEP_SEND_READ_FAIL    7
+#define STEP_RECV_ITER_OK      8
+#define STEP_RECV_PTR_OK       9
+#define STEP_RECV_PTR_NULL    10
+#define STEP_RECV_READ_USER   11
+#define STEP_RECV_READ_KERNEL 12
+#define STEP_RECV_READ_FAIL   13
+BPF_ARRAY(ebpf_debug_steps, u64, 16);
+
 // Map для сохранения контекста между kprobe и kretprobe
 struct recv_context {
     void *data_ptr;
@@ -261,16 +280,67 @@ static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter, u8 *i
     // iov_offset сдвигает текущую позицию внутри iovec/kvec/ubuf
     bpf_probe_read_kernel(&iov_offset, sizeof(iov_offset), (void *)iter + IOV_ITER_IOV_OFFSET_OFF);
 
-    // Сначала пробуем union на 24, затем на 16
-    data_ptr = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_PRIMARY);
-    if (data_ptr) {
-        ebpf_debug_fail.increment(EBPF_DEBUG_UNION_PRIMARY_OK);
-        return (void *)((char *)data_ptr + iov_offset);
+    // Важно: "не-NULL" указатель может быть мусорным на части ядер.
+    // Поэтому валидируем candidate пробным чтением (2 байта):
+    // 1) candidate + iov_offset
+    // 2) candidate (без смещения), если iov_offset невалиден для этого layout.
+    u8 probe[2] = {};
+    void *candidate = NULL;
+    void *final_ptr = NULL;
+    long rd = -1;
+
+    // Сначала union на 24
+    candidate = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_PRIMARY);
+    if (candidate) {
+        final_ptr = (void *)((char *)candidate + iov_offset);
+        rd = bpf_probe_read_user(&probe, sizeof(probe), final_ptr);
+        if (rd != 0) {
+            rd = bpf_probe_read_kernel(&probe, sizeof(probe), final_ptr);
+        }
+        if (rd == 0) {
+            ebpf_debug_fail.increment(EBPF_DEBUG_UNION_PRIMARY_OK);
+            ebpf_debug_steps.increment(STEP_PTR_PRIMARY_OK);
+            return final_ptr;
+        }
+        if (iov_offset != 0) {
+            final_ptr = candidate;
+            rd = bpf_probe_read_user(&probe, sizeof(probe), final_ptr);
+            if (rd != 0) {
+                rd = bpf_probe_read_kernel(&probe, sizeof(probe), final_ptr);
+            }
+            if (rd == 0) {
+                ebpf_debug_fail.increment(EBPF_DEBUG_UNION_PRIMARY_OK);
+                ebpf_debug_steps.increment(STEP_PTR_PRIMARY_OK);
+                return final_ptr;
+            }
+        }
     }
-    data_ptr = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_FALLBACK);
-    if (data_ptr) {
-        ebpf_debug_fail.increment(EBPF_DEBUG_UNION_FALLBACK_OK);
-        return (void *)((char *)data_ptr + iov_offset);
+
+    // Затем union на 16
+    candidate = extract_data_ptr_from_iter_union(iter, iter_type, IOV_ITER_UNION_OFF_FALLBACK);
+    if (candidate) {
+        final_ptr = (void *)((char *)candidate + iov_offset);
+        rd = bpf_probe_read_user(&probe, sizeof(probe), final_ptr);
+        if (rd != 0) {
+            rd = bpf_probe_read_kernel(&probe, sizeof(probe), final_ptr);
+        }
+        if (rd == 0) {
+            ebpf_debug_fail.increment(EBPF_DEBUG_UNION_FALLBACK_OK);
+            ebpf_debug_steps.increment(STEP_PTR_FALLBACK_OK);
+            return final_ptr;
+        }
+        if (iov_offset != 0) {
+            final_ptr = candidate;
+            rd = bpf_probe_read_user(&probe, sizeof(probe), final_ptr);
+            if (rd != 0) {
+                rd = bpf_probe_read_kernel(&probe, sizeof(probe), final_ptr);
+            }
+            if (rd == 0) {
+                ebpf_debug_fail.increment(EBPF_DEBUG_UNION_FALLBACK_OK);
+                ebpf_debug_steps.increment(STEP_PTR_FALLBACK_OK);
+                return final_ptr;
+            }
+        }
     }
 
     return NULL;
@@ -290,17 +360,23 @@ static __always_inline long try_read_data(void *dst, u32 size, void *src) {
     return ret;
 }
 
-// For UBUF the pointer is user-space; kernel read returns garbage (wrong domain, byte[12]=0).
-// Use only bpf_probe_read_user for UBUF so we don't show corrupted data.
-static __always_inline long read_dns_payload(void *dst, u32 size, void *src, u8 iter_type) {
-    if (iter_type == ITER_UBUF) {
-        long ret = bpf_probe_read_user(dst, size, src);
-        if (ret == 0) {
-            ebpf_debug_read.increment(0);
-        }
-        return ret;  // no kernel fallback — would read wrong memory
+// Prefer user read for UBUF. If user read fails (e.g. in container), fall back to kernel read.
+// Caller must pass is_recv: 0 = udp_send path, 1 = udp_recv path (for step counters).
+static __always_inline long read_dns_payload(void *dst, u32 size, void *src, u8 iter_type, u8 is_recv) {
+    long ret = bpf_probe_read_user(dst, size, src);
+    if (ret == 0) {
+        ebpf_debug_read.increment(0);
+        if (is_recv) { ebpf_debug_steps.increment(STEP_RECV_READ_USER); }
+        else         { ebpf_debug_steps.increment(STEP_SEND_READ_USER); }
+        return 0;
     }
-    return try_read_data(dst, size, src);
+    ret = bpf_probe_read_kernel(dst, size, src);
+    if (ret == 0) {
+        ebpf_debug_read.increment(1);
+        if (is_recv) { ebpf_debug_steps.increment(STEP_RECV_READ_KERNEL); }
+        else         { ebpf_debug_steps.increment(STEP_SEND_READ_KERNEL); }
+    }
+    return ret;
 }
 
 // ===== UDP DNS ЗАПРОСЫ =====
@@ -352,28 +428,29 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
         events.perf_submit(ctx, &event, sizeof(event));
         return 0;
     }
+    ebpf_debug_steps.increment(STEP_SEND_ITER_OK);
     
     u8 iter_type = 0;
     void *data_ptr = get_data_ptr_from_iter(&iter, &iter_type);
     
     if (data_ptr) {
-        // UBUF = user buffer: only user read; else try user then kernel
-        ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), data_ptr, iter_type);
+        ebpf_debug_steps.increment(STEP_SEND_PTR_OK);
+        ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), data_ptr, iter_type, 0);
         if (ret == 0) {
             event.data_len = MAX_DNS_DATA;
             parse_dns_header(event.dns_data, event.data_len, &event);
         } else {
             event.data_len = 0;
             ebpf_debug_fail.increment(EBPF_DEBUG_UDP_SEND_READ_FAIL);
+            ebpf_debug_steps.increment(STEP_SEND_READ_FAIL);
         }
     } else {
         event.data_len = 0;
         ebpf_debug_fail.increment(EBPF_DEBUG_UDP_SEND_PTR_NULL);
+        ebpf_debug_steps.increment(STEP_SEND_PTR_NULL);
     }
     
-    // Отправляем ВСЕ DNS события в userspace
     events.perf_submit(ctx, &event, sizeof(event));
-    
     return 0;
 }
 
@@ -409,9 +486,15 @@ int kprobe__udp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     
     rctx.iter_type = 0xff;  // invalid
     if (ret == 0) {
+        ebpf_debug_steps.increment(STEP_RECV_ITER_OK);
         u8 it = 0;
         rctx.data_ptr = get_data_ptr_from_iter(&iter, &it);
         rctx.iter_type = it;
+        if (rctx.data_ptr) {
+            ebpf_debug_steps.increment(STEP_RECV_PTR_OK);
+        } else {
+            ebpf_debug_steps.increment(STEP_RECV_PTR_NULL);
+        }
     } else {
         rctx.data_ptr = NULL;
         ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_NO_PTR);
@@ -456,13 +539,14 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
     event.direction = 2;  // Response
     
     // UBUF = user buffer: only user read; else try user then kernel
-    long ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), rctx->data_ptr, rctx->iter_type);
+    long ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), rctx->data_ptr, rctx->iter_type, 1);
     if (ret == 0) {
         event.data_len = MAX_DNS_DATA;
         parse_dns_header(event.dns_data, event.data_len, &event);
     } else {
         event.data_len = 0;
         ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_READ_FAIL);
+        ebpf_debug_steps.increment(STEP_RECV_READ_FAIL);
     }
     
     recv_ctx_map.delete(&pid_tgid);
@@ -499,7 +583,7 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     
     if (data_ptr) {
         u8 tcp_header[2];
-        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, iter_type);
+        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, iter_type, 0);
         if (ret == 0) {
             u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
             if (dns_len >= 12 && dns_len <= 512) {
@@ -518,7 +602,7 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
                 event.direction = 1;
                 ret = read_dns_payload(event.dns_data,
                                        dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                       data_ptr + 2, iter_type);
+                                       data_ptr + 2, iter_type, 0);
                 if (ret == 0) {
                     event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                     parse_dns_header(event.dns_data, event.data_len, &event);
@@ -583,13 +667,13 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
     u8 it = sctx->iter_type;
     if (data_ptr) {
         u8 tcp_header[2];
-        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, it);
+        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, it, 0);
         if (ret == 0) {
             u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
             if (dns_len >= 12 && dns_len <= 512) {
                 ret = read_dns_payload(event.dns_data,
                                        dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                       data_ptr + 2, it);
+                                       data_ptr + 2, it, 0);
                 if (ret == 0) {
                     event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                     parse_dns_header(event.dns_data, event.data_len, &event);
@@ -598,7 +682,7 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
             }
         }
         if (!data_read) {
-            long ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, data_ptr, it);
+            long ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, data_ptr, it, 0);
             if (ret == 0) {
                 event.data_len = MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
@@ -615,13 +699,13 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
             void *new_data_ptr = get_data_ptr_from_iter(&iter, &it2);
             if (new_data_ptr) {
                 u8 tcp_header[2];
-                ret = read_dns_payload(tcp_header, sizeof(tcp_header), new_data_ptr, it2);
+                ret = read_dns_payload(tcp_header, sizeof(tcp_header), new_data_ptr, it2, 0);
                 if (ret == 0) {
                     u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
                     if (dns_len >= 12 && dns_len <= 512) {
                         ret = read_dns_payload(event.dns_data,
                                                dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                               new_data_ptr + 2, it2);
+                                               new_data_ptr + 2, it2, 0);
                         if (ret == 0) {
                             event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                             parse_dns_header(event.dns_data, event.data_len, &event);
@@ -630,7 +714,7 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
                     }
                 }
                 if (!data_read) {
-                    ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, new_data_ptr, it2);
+                    ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, new_data_ptr, it2, 0);
                     if (ret == 0) {
                         event.data_len = MAX_DNS_DATA;
                         parse_dns_header(event.dns_data, event.data_len, &event);
@@ -723,28 +807,28 @@ int kretprobe__tcp_recvmsg(struct pt_regs *ctx) {
     event.direction = 2;  // Response
     
     u8 tcp_header[2];
-    long ret = read_dns_payload(tcp_header, sizeof(tcp_header), rctx->data_ptr, rctx->iter_type);
+    long ret = read_dns_payload(tcp_header, sizeof(tcp_header), rctx->data_ptr, rctx->iter_type, 1);
     if (ret == 0) {
         u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
         if (dns_len >= 12 && dns_len <= 512) {
             ret = read_dns_payload(event.dns_data,
                                    dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                   rctx->data_ptr + 2, rctx->iter_type);
+                                   rctx->data_ptr + 2, rctx->iter_type, 1);
             if (ret == 0) {
                 event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
             } else {
-                read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
+                read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type, 1);
                 event.data_len = MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
             }
         } else {
-            read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
+            read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type, 1);
             event.data_len = MAX_DNS_DATA;
             parse_dns_header(event.dns_data, event.data_len, &event);
         }
     } else {
-        read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
+        read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type, 1);
         event.data_len = MAX_DNS_DATA;
         parse_dns_header(event.dns_data, event.data_len, &event);
     }
