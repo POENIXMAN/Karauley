@@ -29,6 +29,8 @@ Additional debug (printed when non-zero):
 - **iter_type** — distribution of `iov_iter.iter_type`: UBUF=0, IOVEC=1, KVEC=2, BVEC=3, etc. If you see only type 2 or 8 and no union_primary_ok/union_fallback_ok, the union layout is wrong for that type.
 - **read: user_ok=…, kernel_ok=…** — how many payload reads succeeded via user vs kernel. If both are 0 but union_*_ok > 0, the pointer is valid but not readable (wrong space or page not present).
 
+**UBUF = user buffer:** For `iter_type == ITER_UBUF` the pointer is a **user-space** address. Using `bpf_probe_read_kernel` on it (e.g. in containers) can return garbage, so the code uses **only** `bpf_probe_read_user` for UBUF (no kernel fallback). If user read fails, we get `data_len=0` and do not show corrupted payload (e.g. byte[12]=0 and wrong domain).
+
 ## What to do
 
 - **High `udp_send_data_ptr_null` or `udp_recv_no_ptr`**  

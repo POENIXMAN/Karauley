@@ -109,18 +109,20 @@ BPF_ARRAY(ebpf_debug_read, u64, 4);
 // Map для сохранения контекста между kprobe и kretprobe
 struct recv_context {
     void *data_ptr;
-    u32 saddr;
-    u32 daddr;
-    u16 sport;
-    u16 dport;
-    u8  protocol;
+    u8   iter_type;  // ITER_UBUF=user buffer: must use bpf_probe_read_user only
+    u32  saddr;
+    u32  daddr;
+    u16  sport;
+    u16  dport;
+    u8   protocol;
 };
 BPF_HASH(recv_ctx_map, u64, struct recv_context, 10240);
 
 // Контекст для TCP sendmsg (kretprobe)
 struct send_context {
-    void *data_ptr;  // Указатель на данные
-    struct msghdr *msg; // Сохраняем msg для чтения в kretprobe
+    void *data_ptr;
+    u8   iter_type;   // UBUF = only user read
+    struct msghdr *msg;
     u32 saddr;
     u32 daddr;
     u16 sport;
@@ -235,8 +237,9 @@ static __always_inline void *extract_data_ptr_from_iter_union(struct iov_iter *i
     return NULL;
 }
 
-static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
-    if (!iter) {
+// iter_type_out: set to iter_type so caller can use user-only read for UBUF
+static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter, u8 *iter_type_out) {
+    if (!iter || !iter_type_out) {
         return NULL;
     }
     
@@ -249,6 +252,7 @@ static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
     if (ret != 0) {
         return NULL;
     }
+    *iter_type_out = iter_type;
 
     // Debug: распределение iter_type (0=UBUF, 1=IOVEC, 2=KVEC, …)
     u32 it_key = (u32)(iter_type & 0xf);
@@ -272,7 +276,7 @@ static __always_inline void *get_data_ptr_from_iter(struct iov_iter *iter) {
     return NULL;
 }
 
-// Helper: try user read first, fallback to kernel read
+// Helper: try user read first, fallback to kernel read (for IOVEC/KVEC when data may be in kernel)
 static __always_inline long try_read_data(void *dst, u32 size, void *src) {
     long ret = bpf_probe_read_user(dst, size, src);
     if (ret == 0) {
@@ -284,6 +288,19 @@ static __always_inline long try_read_data(void *dst, u32 size, void *src) {
         ebpf_debug_read.increment(1);  // kernel_read_ok
     }
     return ret;
+}
+
+// For UBUF the pointer is user-space; kernel read returns garbage (wrong domain, byte[12]=0).
+// Use only bpf_probe_read_user for UBUF so we don't show corrupted data.
+static __always_inline long read_dns_payload(void *dst, u32 size, void *src, u8 iter_type) {
+    if (iter_type == ITER_UBUF) {
+        long ret = bpf_probe_read_user(dst, size, src);
+        if (ret == 0) {
+            ebpf_debug_read.increment(0);
+        }
+        return ret;  // no kernel fallback — would read wrong memory
+    }
+    return try_read_data(dst, size, src);
 }
 
 // ===== UDP DNS ЗАПРОСЫ =====
@@ -336,14 +353,14 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
         return 0;
     }
     
-    void *data_ptr = get_data_ptr_from_iter(&iter);
+    u8 iter_type = 0;
+    void *data_ptr = get_data_ptr_from_iter(&iter, &iter_type);
     
     if (data_ptr) {
-        // Читаем DNS пакет (try user, fallback to kernel)
-        ret = try_read_data(event.dns_data, sizeof(event.dns_data), data_ptr);
+        // UBUF = user buffer: only user read; else try user then kernel
+        ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), data_ptr, iter_type);
         if (ret == 0) {
             event.data_len = MAX_DNS_DATA;
-            // Парсим заголовок (с bounds check)
             parse_dns_header(event.dns_data, event.data_len, &event);
         } else {
             event.data_len = 0;
@@ -386,12 +403,15 @@ int kprobe__udp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     rctx.dport = 53;
     rctx.protocol = 17;
     
-    // Получаем указатель на буфер
+    // Получаем указатель на буфер и тип итератора (UBUF = только user read)
     struct iov_iter iter;
     long ret = bpf_probe_read_kernel(&iter, sizeof(iter), &msg->msg_iter);
     
+    rctx.iter_type = 0xff;  // invalid
     if (ret == 0) {
-        rctx.data_ptr = get_data_ptr_from_iter(&iter);
+        u8 it = 0;
+        rctx.data_ptr = get_data_ptr_from_iter(&iter, &it);
+        rctx.iter_type = it;
     } else {
         rctx.data_ptr = NULL;
         ebpf_debug_fail.increment(EBPF_DEBUG_UDP_RECV_NO_PTR);
@@ -435,11 +455,10 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
     event.protocol = rctx->protocol;
     event.direction = 2;  // Response
     
-    // Читаем данные (уже в буфере после recvmsg) — try user, fallback to kernel
-    long ret = try_read_data(event.dns_data, sizeof(event.dns_data), rctx->data_ptr);
+    // UBUF = user buffer: only user read; else try user then kernel
+    long ret = read_dns_payload(event.dns_data, sizeof(event.dns_data), rctx->data_ptr, rctx->iter_type);
     if (ret == 0) {
         event.data_len = MAX_DNS_DATA;
-        // Парсим заголовок (с bounds check)
         parse_dns_header(event.dns_data, event.data_len, &event);
     } else {
         event.data_len = 0;
@@ -448,9 +467,7 @@ int kretprobe__udp_recvmsg(struct pt_regs *ctx) {
     
     recv_ctx_map.delete(&pid_tgid);
     
-    // Отправляем ВСЕ DNS события в userspace
     events.perf_submit(ctx, &event, sizeof(event));
-    
     return 0;
 }
 
@@ -471,26 +488,21 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     
     u64 pid_tgid = bpf_get_current_pid_tgid();
     
-    // Пробуем прочитать данные сразу в kprobe
+    u8 iter_type = 0xff;
     struct iov_iter iter;
     long ret_iter = bpf_probe_read_kernel(&iter, sizeof(iter), &msg->msg_iter);
     void *data_ptr = NULL;
     
     if (ret_iter == 0) {
-        data_ptr = get_data_ptr_from_iter(&iter);
+        data_ptr = get_data_ptr_from_iter(&iter, &iter_type);
     }
     
     if (data_ptr) {
-        // Пробуем прочитать length prefix и данные
         u8 tcp_header[2];
-        long ret = try_read_data(tcp_header, sizeof(tcp_header), data_ptr);
-        
+        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, iter_type);
         if (ret == 0) {
             u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
-            
-            // Проверяем валидность длины
             if (dns_len >= 12 && dns_len <= 512) {
-                // Пробуем прочитать DNS данные
                 struct dns_event event = {};
                 event.timestamp_ns = bpf_ktime_get_ns();
                 event.pid = pid_tgid >> 32;
@@ -504,13 +516,10 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
                 event.dport = 53;
                 event.protocol = 6;
                 event.direction = 1;
-                
-                ret = try_read_data(event.dns_data, 
-                                   dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                   data_ptr + 2);
-                
+                ret = read_dns_payload(event.dns_data,
+                                       dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
+                                       data_ptr + 2, iter_type);
                 if (ret == 0) {
-                    // Успешно прочитали - отправляем сразу
                     event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                     parse_dns_header(event.dns_data, event.data_len, &event);
                     events.perf_submit(ctx, &event, sizeof(event));
@@ -520,9 +529,7 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
         }
     }
     
-    // Если не удалось прочитать в kprobe, сохраняем контекст для kretprobe
     struct send_context sctx = {};
-    
     sctx.timestamp_ns = bpf_ktime_get_ns();
     sctx.pid = pid_tgid >> 32;
     sctx.tid = pid_tgid & 0xFFFFFFFF;
@@ -534,7 +541,8 @@ int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     bpf_probe_read_kernel(&sctx.sport, sizeof(sctx.sport), &sk->__sk_common.skc_num);
     sctx.dport = 53;
     sctx.data_ptr = data_ptr;
-    sctx.msg = msg;  // Сохраняем msg для чтения в kretprobe
+    sctx.iter_type = iter_type;
+    sctx.msg = msg;
     
     send_ctx_map.update(&pid_tgid, &sctx);
     return 0;
@@ -572,22 +580,16 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
     void *data_ptr = sctx->data_ptr;
     int data_read = 0;
     
-    // Сначала пробуем прочитать из сохраненного указателя
+    u8 it = sctx->iter_type;
     if (data_ptr) {
-        // TCP DNS имеет 2-байтный length prefix
         u8 tcp_header[2];
-        long ret = try_read_data(tcp_header, sizeof(tcp_header), data_ptr);
-        
+        long ret = read_dns_payload(tcp_header, sizeof(tcp_header), data_ptr, it);
         if (ret == 0) {
             u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
-            
-            // Проверяем валидность длины (DNS пакет обычно 12-512 байт)
             if (dns_len >= 12 && dns_len <= 512) {
-                // Читаем DNS данные после length prefix
-                ret = try_read_data(event.dns_data, 
-                                   dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                   data_ptr + 2);
-                
+                ret = read_dns_payload(event.dns_data,
+                                       dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
+                                       data_ptr + 2, it);
                 if (ret == 0) {
                     event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                     parse_dns_header(event.dns_data, event.data_len, &event);
@@ -595,10 +597,8 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
                 }
             }
         }
-        
-        // Если не удалось прочитать с length prefix, пробуем без него
         if (!data_read) {
-            long ret = try_read_data(event.dns_data, MAX_DNS_DATA, data_ptr);
+            long ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, data_ptr, it);
             if (ret == 0) {
                 event.data_len = MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
@@ -607,27 +607,21 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
         }
     }
     
-    // Если не удалось прочитать из указателя, пробуем прочитать из msg->msg_iter в kretprobe
     if (!data_read && sctx->msg) {
         struct iov_iter iter;
         long ret = bpf_probe_read_kernel(&iter, sizeof(iter), &sctx->msg->msg_iter);
-        
         if (ret == 0) {
-            void *new_data_ptr = get_data_ptr_from_iter(&iter);
-            
+            u8 it2 = 0;
+            void *new_data_ptr = get_data_ptr_from_iter(&iter, &it2);
             if (new_data_ptr) {
-                // Пробуем прочитать length prefix
                 u8 tcp_header[2];
-                ret = try_read_data(tcp_header, sizeof(tcp_header), new_data_ptr);
-                
+                ret = read_dns_payload(tcp_header, sizeof(tcp_header), new_data_ptr, it2);
                 if (ret == 0) {
                     u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
-                    
                     if (dns_len >= 12 && dns_len <= 512) {
-                        ret = try_read_data(event.dns_data, 
-                                           dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                                           new_data_ptr + 2);
-                        
+                        ret = read_dns_payload(event.dns_data,
+                                               dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
+                                               new_data_ptr + 2, it2);
                         if (ret == 0) {
                             event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                             parse_dns_header(event.dns_data, event.data_len, &event);
@@ -635,10 +629,8 @@ int kretprobe__tcp_sendmsg(struct pt_regs *ctx) {
                         }
                     }
                 }
-                
-                // Если не удалось с length prefix, пробуем без него
                 if (!data_read) {
-                    ret = try_read_data(event.dns_data, MAX_DNS_DATA, new_data_ptr);
+                    ret = read_dns_payload(event.dns_data, MAX_DNS_DATA, new_data_ptr, it2);
                     if (ret == 0) {
                         event.data_len = MAX_DNS_DATA;
                         parse_dns_header(event.dns_data, event.data_len, &event);
@@ -686,14 +678,15 @@ int kprobe__tcp_recvmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg
     bpf_probe_read_kernel(&rctx.daddr, sizeof(rctx.daddr), &sk->__sk_common.skc_daddr);
     bpf_probe_read_kernel(&rctx.sport, sizeof(rctx.sport), &sk->__sk_common.skc_num);
     rctx.dport = 53;
-    rctx.protocol = 6;  // TCP
+    rctx.protocol = 6;
+    rctx.iter_type = 0xff;
     
-    // Получаем указатель на буфер
     struct iov_iter iter;
     long ret = bpf_probe_read_kernel(&iter, sizeof(iter), &msg->msg_iter);
-    
     if (ret == 0) {
-        rctx.data_ptr = get_data_ptr_from_iter(&iter);
+        u8 it = 0;
+        rctx.data_ptr = get_data_ptr_from_iter(&iter, &it);
+        rctx.iter_type = it;
     } else {
         rctx.data_ptr = NULL;
     }
@@ -729,46 +722,34 @@ int kretprobe__tcp_recvmsg(struct pt_regs *ctx) {
     event.protocol = rctx->protocol;
     event.direction = 2;  // Response
     
-    // TCP DNS с length prefix
     u8 tcp_header[2];
-    long ret = try_read_data(tcp_header, sizeof(tcp_header), rctx->data_ptr);
-    
+    long ret = read_dns_payload(tcp_header, sizeof(tcp_header), rctx->data_ptr, rctx->iter_type);
     if (ret == 0) {
         u16 dns_len = (tcp_header[0] << 8) | tcp_header[1];
-        
-        // Проверяем валидность длины (DNS пакет обычно 12-512 байт)
         if (dns_len >= 12 && dns_len <= 512) {
-            // Читаем DNS данные после length prefix
-            ret = try_read_data(event.dns_data, 
-                               dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
-                               rctx->data_ptr + 2);
-            
+            ret = read_dns_payload(event.dns_data,
+                                   dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA,
+                                   rctx->data_ptr + 2, rctx->iter_type);
             if (ret == 0) {
                 event.data_len = dns_len < MAX_DNS_DATA ? dns_len : MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
             } else {
-                // Если чтение не удалось, пробуем без length prefix
-                try_read_data(event.dns_data, MAX_DNS_DATA, rctx->data_ptr);
+                read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
                 event.data_len = MAX_DNS_DATA;
                 parse_dns_header(event.dns_data, event.data_len, &event);
             }
         } else {
-            // Невалидная длина - пробуем без length prefix (может быть данные уже без префикса)
-            try_read_data(event.dns_data, MAX_DNS_DATA, rctx->data_ptr);
+            read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
             event.data_len = MAX_DNS_DATA;
             parse_dns_header(event.dns_data, event.data_len, &event);
         }
     } else {
-        // Не удалось прочитать length prefix - пробуем без него
-        try_read_data(event.dns_data, MAX_DNS_DATA, rctx->data_ptr);
+        read_dns_payload(event.dns_data, MAX_DNS_DATA, rctx->data_ptr, rctx->iter_type);
         event.data_len = MAX_DNS_DATA;
         parse_dns_header(event.dns_data, event.data_len, &event);
     }
     
     recv_ctx_map.delete(&pid_tgid);
-    
-    // Отправляем ВСЕ DNS события в userspace
     events.perf_submit(ctx, &event, sizeof(event));
-    
     return 0;
 }
