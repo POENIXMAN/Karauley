@@ -8,7 +8,7 @@ global:
 # Image configuration
 image:
   repository: localhost/ebpfmodule
-  tag: v1.3
+  tag: v1.4
   pullPolicy: IfNotPresent
 
 # Application name
@@ -35,6 +35,8 @@ daemonset:
   # Security context
   securityContext:
     privileged: true
+    runAsUser: 0
+    runAsGroup: 0
     # Alternative minimal capabilities (uncomment to use instead of privileged)
     # capabilities:
     #   add:

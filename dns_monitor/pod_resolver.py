@@ -2,6 +2,7 @@
 import json
 import os
 import ssl
+import time
 import urllib.error
 import urllib.request
 
@@ -16,6 +17,10 @@ class PodResolver:
         self.cgroup_cache = {}
         self._uid_to_ns_name = {}
         self._k8s_resolve_enabled = None
+        # Кэш IP -> pod (namespace/name). Обновляется периодически.
+        self._ip_to_pod = {}
+        self._ip_cache_ts = 0.0
+        self._IP_CACHE_TTL = 30.0  # секунд
 
     def _in_cluster(self):
         if self._k8s_resolve_enabled is None:
@@ -71,6 +76,58 @@ class PodResolver:
                     pod_info["namespace_name"] = ns_name
         self.cgroup_cache[cgroup_id] = pod_info  # cache result (including None) to avoid repeated /proc reads
         return pod_info
+
+    def _refresh_ip_to_pod(self):
+        """Обновить кэш IP -> pod через K8s API (только поды на этой ноде)."""
+        now = time.time()
+        if now - self._ip_cache_ts < self._IP_CACHE_TTL and self._ip_to_pod:
+            return
+        if not self._in_cluster():
+            return
+        node_name = os.environ.get("NODE_NAME", "")
+        if not node_name:
+            dev_log("pod", "NODE_NAME not set, IP->pod resolution disabled")
+            return
+        try:
+            token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+            host = os.environ.get("KUBERNETES_SERVICE_HOST", "")
+            port = os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+            if not host or not os.path.exists(token_path):
+                return
+            with open(token_path, "r") as f:
+                token = f.read().strip()
+            ca = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+            ctx = ssl.create_default_context(cafile=ca) if os.path.exists(ca) else ssl.create_default_context()
+            # Только поды на этой ноде — их podIP виден на данном узле
+            url = f"https://{host}:{port}/api/v1/pods?limit=500&fieldSelector=spec.nodeName={node_name}"
+            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+            with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+            new_map = {}
+            for item in data.get("items", []):
+                meta = item.get("metadata", {})
+                ns = meta.get("namespace", "default")
+                name = meta.get("name", "")
+                uid = (meta.get("uid") or "")[:12]
+                pod_ip = (item.get("status") or {}).get("podIP")
+                if pod_ip and name:
+                    new_map[pod_ip] = {"namespace_name": f"{ns}/{name}", "pod_uid": uid, "type": "kubernetes"}
+            self._ip_to_pod = new_map
+            self._ip_cache_ts = now
+            dev_log("pod", f"IP->pod cache refreshed: {len(new_map)} pods on node {node_name}")
+        except (OSError, urllib.error.URLError, urllib.error.HTTPError, ValueError, KeyError) as e:
+            dev_log("pod", f"K8s API list pods (node={node_name}): {e}")
+        return
+
+    def get_pod_info_by_ip(self, ip_str):
+        """
+        По IP (podIP) вернуть pod namespace/name через K8s API.
+        ip_str — строка "10.42.0.5".
+        """
+        if not ip_str or ip_str == "0.0.0.0":
+            return None
+        self._refresh_ip_to_pod()
+        return self._ip_to_pod.get(ip_str)
 
     def _resolve_from_cgroup(self, pid):
         """Read host /proc/<pid>/cgroup to get pod/container. Use HOST_PROC."""

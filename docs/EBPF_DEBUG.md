@@ -71,6 +71,37 @@ No `trace_pipe` or debugfs mount is required; everything appears in normal conta
 
 ---
 
+## Conclusion from K8s logs (e.g. logs-master.txt)
+
+When you see:
+
+```text
+[eBPF debug] steps: send_iter_ok=15, send_ptr_ok=15, ptr_primary_probe_ok=40, send_read_kernel_ok=15, recv_iter_ok=25, recv_ptr_ok=25, recv_read_kernel_ok=25
+[eBPF debug] read: user_ok=0, kernel_ok=40
+```
+
+**What this means:**
+
+1. **Pointer extraction works** — `send_ptr_ok`, `recv_ptr_ok`, `ptr_primary_probe_ok`: we get a non-NULL pointer and the 2-byte probe read succeeds (so the address is readable at probe time).
+2. **Full payload read “succeeds”** — `send_read_kernel_ok` / `recv_read_kernel_ok` and `kernel_ok`; no `send_read_fail` / `recv_read_fail`. So `bpf_probe_read_kernel(256 bytes)` returns 0 (no error).
+3. **User read never works in K8s** — `user_ok=0`. The pointer we have is a **user-space** address (from `iov_iter` for UBUF). In the container, `bpf_probe_read_user` fails for that address; we then use `bpf_probe_read_kernel` and it “succeeds” but returns **different memory** (not the process’s DNS buffer).
+4. **Payload content is wrong** — hex dump shows `byte[12]=0x00` and pointer-like bytes at 2–11. So we’re reading some kernel view of that VA (e.g. zero page or another mapping), not the real DNS packet. Hence `<unparseable>` and no real domains.
+
+**Root cause (for this K8s setup):**  
+User-space buffer is not readable with `bpf_probe_read_user` in the container (likely user namespace / context). Fallback `bpf_probe_read_kernel` on that user VA does not fault but returns the wrong content, so we must not rely on it for parsing.
+
+**What to check / work on next:**
+
+| Priority | Action | Purpose |
+|----------|--------|--------|
+| 1 | Run dns-monitor with **host PID** and/or **host user** namespace (e.g. `securityContext.runAsUser: 0`, mount host `/proc` already used) | See if user read starts working when eBPF runs in host user/pid context. |
+| 2 | On the node, run `uname -r` and open `include/linux/uio.h` for that kernel; confirm `struct iov_iter` union offset (16 vs 24) and that we use the right one for UBUF. | Rule out layout mismatch (your logs show ptr_primary_probe_ok, so 24 is valid for the 2-byte test; the full 256-byte read is still wrong content). |
+| 3 | Try **small user read** in eBPF: e.g. `bpf_probe_read_user(dst, 12, src)` (only DNS header). If it succeeds, then user space is readable but something fails for 256 bytes (e.g. partial map). | Differentiate “user VA invalid” vs “only long read fails”. |
+| 4 | Consider a **different hook** where DNS payload is in kernel memory (e.g. after copy into skb in the network stack, or XDP/skb-based capture). | Avoid depending on reading from the process’s user buffer in container context. |
+| 5 | Document in thesis: “In Kubernetes the payload read from the process buffer fails (user read fails; kernel read returns wrong data); detection still works at flow level (PID, pod, rate, IP); domain-level detection requires host namespace or kernel-level capture.” | Clear limitation and future work. |
+
+---
+
 ## Hypotheses: why it works on host but fails in K8s
 
 Use **`[eBPF debug] steps:`** to see where the pipeline stops in the cluster. Then match to one of the following.
@@ -82,45 +113,6 @@ Use **`[eBPF debug] steps:`** to see where the pipeline stops in the cluster. Th
 | `send_read_kernel_ok` > 0 but domains still &lt;unparseable&gt; | Data is wrong | Pointer valid but not the DNS buffer (e.g. wrong offset); or kernel returns different memory in container. |
 | `recv_*` steps: same pattern as send | Recv path | Same causes on `udp_recvmsg` (kprobe: ptr, kretprobe: read). |
 
-Below are the main hypotheses, in order of likelihood. The **eBPF debug counters** tell you which one is happening (e.g. high `udp_send_data_ptr_null` → #1 or #2).
-
-### 1. Different kernel on nodes → wrong `iov_iter` layout (most likely)
-
-- **VM**: One kernel (e.g. 5.15). The eBPF uses **fixed offsets** for `struct iov_iter` (`IOV_ITER_ITER_TYPE_OFF=0`, `IOV_ITER_UNION_OFF=16`). On that kernel the layout matches, so `get_data_ptr_from_iter()` works.
-- **K8s nodes**: Often a **different** kernel (e.g. 5.4, 5.10, 6.1). Layout of `iov_iter` (and the union where `ubuf`/`__iov` live) **changed between versions**. With the wrong offset we read garbage, get wrong `iter_type` or wrong pointer → we return NULL → `data_len=0`.
-- **Check**: Compare kernel versions on VM vs node (`uname -r`). If they differ, treat this as the prime suspect and fix by using the **node** kernel’s `include/linux/uio.h` (or BTF) to get correct offsets / layout for that kernel.
-
-### 2. Different `iter_type` in K8s (we only handle UBUF and IOVEC)
-
-- **VM**: Processes (systemd-resolve, browsers, etc.) end up with `ITER_UBUF` or `ITER_IOVEC` when calling `sendmsg()`, so our code path works.
-- **K8s**: In containers, **who** sends DNS changes: Python (dns-monitor), `nslookup`, CoreDNS, often with different libc (e.g. **musl** in Alpine) or different socket usage. The kernel may build an `iov_iter` with another type (e.g. `ITER_KVEC`, `ITER_BVEC`, or a newer type). We **only** handle `ITER_UBUF` (0) and `ITER_IOVEC` (1); anything else returns NULL → `data_len=0`.
-- **Check**: If debug shows high `udp_send_data_ptr_null`, add a counter in eBPF for “unknown iter_type” (the value we read at `IOV_ITER_ITER_TYPE_OFF`) and log it from Python. That shows the real type on the failing path.
-
-### 3. Libc / syscall path (musl vs glibc)
-
-- **Containers** often use **Alpine (musl)**. `sendmsg()` / `writev()` may be implemented differently than glibc: different way to set up `msghdr` / `iovec`, or multiple small iovecs. The kernel then might use `ITER_IOVEC` with **multiple** segments; we only read the **first** `iov_base`. If the DNS payload is split across segments, we either get a wrong pointer or only the first chunk (and parsing fails). So we could see `data_ptr` non-NULL but wrong/partial data, or the kernel might use a different iter type.
-- So this can manifest as either “pointer NULL” (if iter type is something we don’t handle) or “pointer valid but wrong data” (if we only read first iovec).
-
-### 4. Different processes and code paths
-
-- **VM**: “Real” clients (browsers, systemd-resolve, etc.) — one typical path.
-- **K8s**: Same eBPF hooks, but **different processes** (python3, nslookup in minimal image, CoreDNS). They might use TCP for DNS in some cases, or a different syscall pattern, so we might hit `udp_sendmsg` less or with a different iter state. The debug counters show **which** hook path is failing (send vs recv, iter vs read).
-
-### 5. Timing (less likely for “always fail” in K8s)
-
-- In `udp_sendmsg` we’re in **entry** (kprobe). In theory `msg_iter` might not be fully set up yet in some paths. If in K8s that path is always taken and on the VM a different path is taken, we could see “always NULL in K8s”. This is less likely than layout/iter_type, but if counters show “iter read fail” or “ptr null” only on send path, it’s possible.
-
----
-
-**What to do next**
-
-1. Deploy with the eBPF debug counters and check **which** counter is high in K8s (`udp_send_data_ptr_null` vs `udp_recv_no_ptr` vs `*_probe_read_fail`).
-2. If it’s **`udp_send_data_ptr_null`** or **`udp_recv_no_ptr`**: treat as **layout or iter_type** (hypotheses #1 and #2). Get the node kernel’s `struct iov_iter` (and `include/linux/uio.h`) and either:
-   - adjust `IOV_ITER_*` offsets for that kernel, or
-   - add handling for the actual `iter_type` you see (e.g. log it first, then add a branch).
-3. If it’s **`*_probe_read_fail`**: pointer is non-NULL but read fails (e.g. page/address issue); then consider namespace/timing (hypotheses #3–5).
-
----
 
 ## Теория: где почитать
 

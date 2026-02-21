@@ -1,4 +1,5 @@
-"""Load BPF program: read source, compile, open perf buffer."""
+"""Load BPF program: read source, compile, open perf buffer. Kprobe mode only."""
+import os
 import sys
 import traceback
 
@@ -11,13 +12,13 @@ from dns_monitor.devmode import dev_log
 def load_bpf(handle_event_cb):
     """
     Read BPF source, compile, open perf buffer. Returns (bpf, None) or (None, error_msg).
-    handle_event_cb(cpu, data, size) is called for each event.
+    Uses dns_ebpf_improved.bpf.c (kprobe on udp/tcp_sendmsg, recvmsg).
     """
     bpf_path = config.BPF_SOURCE_FILE
     dev_log("bpf", f"Loading eBPF from {bpf_path}")
 
     try:
-        print("[*] Шаг 1/3: чтение файла...")
+        print(f"[*] Шаг 1/3: чтение файла...")
         with open(bpf_path, 'r') as f:
             bpf_text = f.read()
         print(f"[*] Шаг 1/3: OK ({len(bpf_text)} байт)")

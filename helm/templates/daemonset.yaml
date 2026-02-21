@@ -44,13 +44,19 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           
-          # eBPF требует privileged режим
+          # eBPF требует privileged режим; runAsUser/runAsGroup могут помочь с probe_read_user в контейнере
           securityContext:
             {{- if .Values.daemonset.securityContext.privileged }}
             privileged: {{ .Values.daemonset.securityContext.privileged }}
             {{- else if .Values.daemonset.securityContext.capabilities }}
             capabilities:
               {{- toYaml .Values.daemonset.securityContext.capabilities | nindent 14 }}
+            {{- end }}
+            {{- with .Values.daemonset.securityContext.runAsUser }}
+            runAsUser: {{ . }}
+            {{- end }}
+            {{- with .Values.daemonset.securityContext.runAsGroup }}
+            runAsGroup: {{ . }}
             {{- end }}
           
           ports:
@@ -135,7 +141,6 @@ spec:
           hostPath:
             path: /lib/modules
             type: Directory
-          type: Directory
         - name: src
           hostPath:
             path: /usr/src

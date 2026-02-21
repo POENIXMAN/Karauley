@@ -1,4 +1,3 @@
-"""Main: banner, RLIMIT, load BPF, start HTTP, signal, poll loop."""
 import os
 import resource
 import signal
@@ -170,8 +169,10 @@ def main():
     print(f"\n[*] Загрузка eBPF из {config.BPF_SOURCE_FILE}...")
     bpf, err = load_bpf(handle_event)
     if bpf is None:
-        print(f"{RED}[!] Ошибка загрузки eBPF: {err}{RESET}", file=sys.stderr)
-        traceback.print_exc()
+        print(f"{RED}[!] Ошибка загрузки eBPF: {err}{RESET}", file=sys.stderr, flush=True)
+        print("Чтобы увидеть логи упавшего контейнера: kubectl logs <pod> -c dns-monitor --previous", file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        sys.stderr.flush()
         sys.exit(1)
 
     metrics_port = int(os.environ.get(config.ENV_METRICS_PORT, '9999'))
@@ -192,7 +193,6 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
     print(f"[*] Используется Perf Buffer")
-    # Log eBPF failure reasons to stderr every 30s (visible in container logs when data_len=0)
     try:
         debug_thread = threading.Thread(
             target=_ebpf_debug_loop,
