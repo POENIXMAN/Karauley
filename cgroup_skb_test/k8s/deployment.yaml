@@ -20,13 +20,15 @@ spec:
       labels:
         app: cgroup-skb-test
     spec:
+      nodeName: k8s-master
       hostNetwork: true
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
         - name: test
-          image: cgroup-skb-test:latest
-          imagePullPolicy: IfNotPresent
+          # Pin to digest so K3s/containerd uses your imported image (no wrong ref)
+          image: localhost/cgroup-skb-test@sha256:cf12750b9d42f6eaf799609af0d13eaebd51a71ad9aa2f3578340820bec1094d
+          imagePullPolicy: Never
           securityContext:
             privileged: true
           env:

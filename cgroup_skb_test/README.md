@@ -30,15 +30,27 @@ sudo python3 test_cgroup_skb.py
 **Build image** (from repo root):
 
 ```bash
-docker build -f cgroup_skb_test/Dockerfile -t cgroup-skb-test:latest .
-# If using a registry: tag and push, then set image in k8s/deployment.yaml
+docker build -f cgroup_skb_test/Dockerfile -t localhost/cgroup-skb-test:latest .
 ```
 
-**Deploy:**
+**Deploy (with registry):** push image, set `image:` in deployment, then `kubectl apply -f cgroup_skb_test/k8s/deployment.yaml`.
 
-```bash
-kubectl apply -f cgroup_skb_test/k8s/deployment.yaml
-```
+**K3s (no registry):** deployment uses `image: localhost/cgroup-skb-test:latest` and `imagePullPolicy: Never`. Load image on the node:
+
+1. **Save** (on build host; `-o` = output file, then image name):
+   ```bash
+   docker save -o cgroup-skb-test-latest.tar localhost/cgroup-skb-test:latest
+   ```
+2. Copy tar to node (e.g. `scp cgroup-skb-test-latest.tar user@k8s-master:~/`).
+3. **Import** on node (use real path, not `/path/to/`):
+   ```bash
+   sudo k3s ctr --namespace=k8s.io images import /home/db-user/cgroup-skb-test-latest.tar
+   ```
+4. **Apply:**
+   ```bash
+   kubectl apply -f cgroup_skb_test/k8s/deployment.yaml
+   kubectl rollout restart deployment/cgroup-skb-test -n default
+   ```
 
 **Logs** (payload lines):
 
