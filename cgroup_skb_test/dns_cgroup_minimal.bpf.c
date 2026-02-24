@@ -1,7 +1,3 @@
-/*
- * Minimal CGROUP_SKB test: egress/ingress, UDP port 53, copy 64 bytes payload.
- * Verifier-friendly: fixed 20-byte IP header only. All offsets are constants.
- */
 #include <uapi/linux/bpf.h>
 #include <linux/in.h>
 #include <linux/ip.h>
@@ -9,59 +5,43 @@
 
 #define DNS_PORT 53
 #define PAYLOAD_SAMPLE 64
-#define EVENT_SIZE (1 + PAYLOAD_SAMPLE)
 
-#define IP_HDR_LEN  20
-#define UDP_HDR_LEN 8
-#define PAYLOAD_OFF 28   /* IP_HDR_LEN + UDP_HDR_LEN */
+struct event_t {
+    uint32_t direction; // 1=egress, 2=ingress
+    uint8_t  payload[PAYLOAD_SAMPLE];
+};
 
 BPF_PERF_OUTPUT(events);
 
-/* Egress: fixed offsets only, no variable ip_len */
-__attribute__((section("cgroup_skb/egress")))
-int egress(struct __sk_buff *ctx)
-{
-    void *data_end = (void *)(long)ctx->data_end;
-    void *data     = (void *)(long)ctx->data;
+// Helper to process packets
+static __always_inline int monitor_dns(struct __sk_buff *ctx, uint32_t dir) {
+    // 1. Fixed offset check: IPv4 protocol field is at offset 9
+    uint8_t proto;
+    if (bpf_skb_load_bytes(ctx, 9, &proto, 1) < 0) return 1;
+    if (proto != IPPROTO_UDP) return 1;
 
-    if (data + 10 > data_end)
-        return 1;
-    if (((u8 *)data)[9] != 17)   /* IPPROTO_UDP */
-        return 1;
-    if (data + PAYLOAD_OFF + 1 > data_end)   /* at least 1 byte payload */
-        return 1;
-    /* UDP dest port at offset 22 (20 + 2) */
-    if (__builtin_bswap16(*(u16 *)(data + 22)) != DNS_PORT)
-        return 1;
+    // 2. Load ports: UDP header starts at offset 20 (assuming no IP options)
+    // Source port at 20, Dest port at 22
+    uint16_t sport, dport;
+    if (bpf_skb_load_bytes(ctx, 20, &sport, 2) < 0) return 1;
+    if (bpf_skb_load_bytes(ctx, 22, &dport, 2) < 0) return 1;
 
-    u8 buf[EVENT_SIZE];
-    buf[0] = 1;
-    /* Copy first byte only (constant size = verifier-safe); shows any UDP/53 egress */
-    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], 1) == 0)
-        events.perf_submit(ctx, buf, EVENT_SIZE);
+    sport = __builtin_bswap16(sport);
+    dport = __builtin_bswap16(dport);
+
+    // 3. Filter for DNS
+    if (sport != DNS_PORT && dport != DNS_PORT) return 1;
+
+    // 4. Prep event - Zero-init is MANDATORY for verifier
+    struct event_t ev = {}; 
+    ev.direction = dir;
+
+    // DNS payload starts at offset 28 (20 bytes IP + 8 bytes UDP)
+    bpf_skb_load_bytes(ctx, 28, ev.payload, PAYLOAD_SAMPLE);
+    
+    events.perf_submit(ctx, &ev, sizeof(ev));
     return 1;
 }
 
-/* Ingress */
-__attribute__((section("cgroup_skb/ingress")))
-int ingress(struct __sk_buff *ctx)
-{
-    void *data_end = (void *)(long)ctx->data_end;
-    void *data     = (void *)(long)ctx->data;
-
-    if (data + 10 > data_end)
-        return 1;
-    if (((u8 *)data)[9] != 17)
-        return 1;
-    if (data + PAYLOAD_OFF + 1 > data_end)
-        return 1;
-    /* UDP source port at offset 20 */
-    if (__builtin_bswap16(*(u16 *)(data + 20)) != DNS_PORT)
-        return 1;
-
-    u8 buf[EVENT_SIZE];
-    buf[0] = 2;
-    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], 1) == 0)
-        events.perf_submit(ctx, buf, EVENT_SIZE);
-    return 1;
-}
+int egress(struct __sk_buff *ctx)  { return monitor_dns(ctx, 1); }
+int ingress(struct __sk_buff *ctx) { return monitor_dns(ctx, 2); }
