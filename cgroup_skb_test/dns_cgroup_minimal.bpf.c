@@ -18,8 +18,8 @@
 BPF_PERF_OUTPUT(events);
 
 /* Egress: fixed offsets only, no variable ip_len */
-int egress(struct __sk_buff *ctx)
 __attribute__((section("cgroup_skb/egress")))
+int egress(struct __sk_buff *ctx)
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
@@ -28,7 +28,7 @@ __attribute__((section("cgroup_skb/egress")))
         return 1;
     if (((u8 *)data)[9] != 17)   /* IPPROTO_UDP */
         return 1;
-    if (data + PAYLOAD_OFF + PAYLOAD_SAMPLE > data_end)
+    if (data + PAYLOAD_OFF + 1 > data_end)   /* at least 1 byte payload */
         return 1;
     /* UDP dest port at offset 22 (20 + 2) */
     if (__builtin_bswap16(*(u16 *)(data + 22)) != DNS_PORT)
@@ -36,14 +36,15 @@ __attribute__((section("cgroup_skb/egress")))
 
     u8 buf[EVENT_SIZE];
     buf[0] = 1;
-    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], PAYLOAD_SAMPLE) == 0)
+    /* Copy first byte only (constant size = verifier-safe); shows any UDP/53 egress */
+    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], 1) == 0)
         events.perf_submit(ctx, buf, EVENT_SIZE);
     return 1;
 }
 
 /* Ingress */
-int ingress(struct __sk_buff *ctx)
 __attribute__((section("cgroup_skb/ingress")))
+int ingress(struct __sk_buff *ctx)
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
@@ -52,7 +53,7 @@ __attribute__((section("cgroup_skb/ingress")))
         return 1;
     if (((u8 *)data)[9] != 17)
         return 1;
-    if (data + PAYLOAD_OFF + PAYLOAD_SAMPLE > data_end)
+    if (data + PAYLOAD_OFF + 1 > data_end)
         return 1;
     /* UDP source port at offset 20 */
     if (__builtin_bswap16(*(u16 *)(data + 20)) != DNS_PORT)
@@ -60,7 +61,7 @@ __attribute__((section("cgroup_skb/ingress")))
 
     u8 buf[EVENT_SIZE];
     buf[0] = 2;
-    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], PAYLOAD_SAMPLE) == 0)
+    if (bpf_skb_load_bytes(ctx, PAYLOAD_OFF, &buf[1], 1) == 0)
         events.perf_submit(ctx, buf, EVENT_SIZE);
     return 1;
 }
