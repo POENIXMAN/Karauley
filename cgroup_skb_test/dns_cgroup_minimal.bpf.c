@@ -11,11 +11,7 @@
 
 #define DNS_PORT 53
 #define PAYLOAD_SAMPLE 64
-
-struct event_t {
-    u8  direction;  /* 1=egress 2=ingress */
-    u8  payload[PAYLOAD_SAMPLE];
-};
+#define EVENT_SIZE (1 + PAYLOAD_SAMPLE)  /* direction (1) + payload (64) */
 
 BPF_PERF_OUTPUT(events);
 
@@ -51,14 +47,14 @@ int egress(struct __sk_buff *ctx)
     if (data + payload_off + 1 > data_end)
         return 1;
 
-    struct event_t ev;
-    ev.direction = 1;
+    u8 buf[EVENT_SIZE];
+    buf[0] = 1; /* egress */
     u32 avail = (u32)(data_end - data - payload_off);
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
     if (copy > 0) {
-        long ret = bpf_skb_load_bytes(ctx, payload_off, ev.payload, copy);
+        long ret = bpf_skb_load_bytes(ctx, payload_off, &buf[1], copy);
         if (ret == 0)
-            events.perf_submit(ctx, &ev, sizeof(ev));
+            events.perf_submit(ctx, buf, EVENT_SIZE);
     }
     return 1; /* pass packet */
 }
@@ -88,14 +84,14 @@ int ingress(struct __sk_buff *ctx)
     if (data + payload_off + 1 > data_end)
         return 1;
 
-    struct event_t ev;
-    ev.direction = 2;
+    u8 buf[EVENT_SIZE];
+    buf[0] = 2; /* ingress */
     u32 avail = (u32)(data_end - data - payload_off);
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
     if (copy > 0) {
-        long ret = bpf_skb_load_bytes(ctx, payload_off, ev.payload, copy);
+        long ret = bpf_skb_load_bytes(ctx, payload_off, &buf[1], copy);
         if (ret == 0)
-            events.perf_submit(ctx, &ev, sizeof(ev));
+            events.perf_submit(ctx, buf, EVENT_SIZE);
     }
     return 1;
 }
