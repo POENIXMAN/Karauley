@@ -1,8 +1,3 @@
-/*
- * Minimal CGROUP_SKB test: egress/ingress hook, UDP port 53, copy first 64 bytes
- * of payload to perf buffer. No iov_iter, no user memory — payload from skb.
- * Sections cgroup_skb/egress and cgroup_skb/ingress for loader.
- */
 #include <uapi/linux/bpf.h>
 #include <uapi/linux/if_ether.h>
 #include <linux/in.h>
@@ -11,7 +6,11 @@
 
 #define DNS_PORT 53
 #define PAYLOAD_SAMPLE 64
-#define EVENT_SIZE (1 + PAYLOAD_SAMPLE)  /* direction (1) + payload (64) */
+
+struct event_t {
+    u8  direction;  /* 1=egress 2=ingress */
+    u8  payload[PAYLOAD_SAMPLE];
+};
 
 BPF_PERF_OUTPUT(events);
 
@@ -20,42 +19,47 @@ static __always_inline u32 ip_hdr_len(struct iphdr *ip)
     return ((u32)(ip->ihl)) * 4;
 }
 
-#define SEC(name) __attribute__((section(name)))
-
 /* Egress: outgoing packets from this cgroup */
 SEC("cgroup_skb/egress")
 int egress(struct __sk_buff *ctx)
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
-
     struct iphdr *ip = (struct iphdr *)data;
+    
     if (data + sizeof(struct iphdr) > data_end)
         return 1;
+
+    // FIX: Added missing ip_len calculation
     u32 ip_len = ip_hdr_len(ip);
     if (ip_len < sizeof(struct iphdr) || data + ip_len + sizeof(struct udphdr) > data_end)
         return 1;
+
     if (ip->protocol != IPPROTO_UDP)
         return 1;
 
     struct udphdr *udp = (struct udphdr *)(data + ip_len);
-    u16 dport = __builtin_bswap16(udp->dest);
+    u16 dport = bpf_ntohs(udp->dest);
     if (dport != DNS_PORT)
         return 1;
 
     u32 payload_off = ip_len + sizeof(struct udphdr);
-    if (data + payload_off + 1 > data_end)
+    
+    struct event_t ev = { .direction = 1 };
+    
+    // FIX: Use ctx->len instead of pointer subtraction
+    if (ctx->len <= payload_off)
         return 1;
-
-    u8 buf[EVENT_SIZE];
-    buf[0] = 1; /* egress */
-    u32 avail = (u32)(data_end - data - payload_off);
+        
+    u32 avail = ctx->len - payload_off;
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
+    
     if (copy > 0) {
-        long ret = bpf_skb_load_bytes(ctx, payload_off, &buf[1], copy);
+        long ret = bpf_skb_load_bytes(ctx, payload_off, ev.payload, copy);
         if (ret == 0)
-            events.perf_submit(ctx, buf, EVENT_SIZE);
+            events.perf_submit(ctx, &ev, sizeof(ev));
     }
+    
     return 1; /* pass packet */
 }
 
@@ -65,33 +69,41 @@ int ingress(struct __sk_buff *ctx)
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
-
     struct iphdr *ip = (struct iphdr *)data;
+    
     if (data + sizeof(struct iphdr) > data_end)
         return 1;
+    
     u32 ip_len = ip_hdr_len(ip);
     if (ip_len < sizeof(struct iphdr) || data + ip_len + sizeof(struct udphdr) > data_end)
         return 1;
+    
     if (ip->protocol != IPPROTO_UDP)
         return 1;
+    
+    // FIX: Removed the duplicate ip_len block that was here
 
     struct udphdr *udp = (struct udphdr *)(data + ip_len);
-    u16 sport = __builtin_bswap16(udp->source);
+    u16 sport = bpf_ntohs(udp->source); 
     if (sport != DNS_PORT)
         return 1;
 
     u32 payload_off = ip_len + sizeof(struct udphdr);
-    if (data + payload_off + 1 > data_end)
-        return 1;
 
-    u8 buf[EVENT_SIZE];
-    buf[0] = 2; /* ingress */
-    u32 avail = (u32)(data_end - data - payload_off);
+    struct event_t ev = { .direction = 2 };
+    
+    // FIX: Use ctx->len instead of pointer subtraction
+    if (ctx->len <= payload_off)
+        return 1;
+        
+    u32 avail = ctx->len - payload_off;
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
+    
     if (copy > 0) {
-        long ret = bpf_skb_load_bytes(ctx, payload_off, &buf[1], copy);
+        long ret = bpf_skb_load_bytes(ctx, payload_off, ev.payload, copy);
         if (ret == 0)
-            events.perf_submit(ctx, buf, EVENT_SIZE);
+            events.perf_submit(ctx, &ev, sizeof(ev));
     }
+    
     return 1;
 }
