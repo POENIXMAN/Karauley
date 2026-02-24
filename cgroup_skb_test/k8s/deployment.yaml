@@ -33,6 +33,8 @@ spec:
           env:
             - name: CGROUP_PATH
               value: "/host-cgroup"
+            - name: DEBUG
+              value: "0"
           volumeMounts:
             - name: host-cgroup
               mountPath: /host-cgroup

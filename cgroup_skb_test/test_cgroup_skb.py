@@ -7,7 +7,9 @@ import os
 import sys
 
 # Default cgroup v2 root; override with CGROUP_PATH env
+# DEBUG: 0 = only DNS, 1 = any UDP (to verify hooks fire), 2 = any IP
 CGROUP_PATH = os.environ.get("CGROUP_PATH", "/sys/fs/cgroup")
+DEBUG_LEVEL = int(os.environ.get("DEBUG", "0"))
 
 def main():
     try:
@@ -42,6 +44,14 @@ def main():
     print(f"[*] Loading BPF from {bpf_src} ...")
     bpf = BPF(text=text)
     print("[*] BPF loaded successfully")
+
+    if DEBUG_LEVEL > 0:
+        try:
+            debug_arr = bpf.get_table("debug_level")
+            debug_arr[0] = DEBUG_LEVEL
+            print(f"[*] Debug level set to {DEBUG_LEVEL} (1=any UDP, 2=any IP)")
+        except Exception as e:
+            print(f"[!] Failed to set debug_level: {e}", file=sys.stderr)
 
     print(f"[*] Opening cgroup: {CGROUP_PATH}")
     try:
@@ -78,24 +88,29 @@ def main():
         sys.exit(1)
     os.close(cgroup_fd)
 
-    # Event: direction (1 byte) + payload (64 bytes). BCC passes (cpu, data, size); data is raw pointer.
+    # Event: direction (4) + kind (4) + payload (64). C struct layout.
     import ctypes
     class Event(ctypes.Structure):
-        _fields_ = [("direction", ctypes.c_uint8), ("payload", ctypes.c_uint8 * 64)]
+        _fields_ = [
+            ("direction", ctypes.c_uint32),
+            ("kind", ctypes.c_uint32),
+            ("payload", ctypes.c_uint8 * 64),
+        ]
 
     def on_event(cpu, data, size):
-        if size < 1:
+        if size < 8:
             return
         ev = ctypes.cast(data, ctypes.POINTER(Event)).contents
         label = "egress" if ev.direction == 1 else "ingress"
-        payload_len = min(size - 1, 64)
+        kind_str = "dns" if ev.kind == 0 else ("udp" if ev.kind == 1 else "ip")
+        payload_len = min(size - 8, 64)
         if payload_len <= 0:
             return
         payload = bytes(ev.payload[:payload_len])
         hex_str = ' '.join(f'{b:02x}' for b in payload[:32])
         if payload_len > 32:
             hex_str += " ..."
-        print(f"{label}: {hex_str}")
+        print(f"[{kind_str}] {label}: {hex_str}")
 
     bpf["events"].open_perf_buffer(on_event)
     print("[*] Perf buffer opened. Polling for DNS events (generate traffic, e.g. nslookup google.com). Ctrl+C to stop.")

@@ -62,6 +62,10 @@ docker build -f cgroup_skb_test/Dockerfile -t cgroup-skb-test:latest .
 kubectl logs -f deployment/cgroup-skb-test -n default
 ```
 
+Чтобы включить отладку (любой UDP или любой IP), в `deployment.yaml` задайте `DEBUG: "1"` или `DEBUG: "2"` в `env` контейнера и перезапустите под.
+
+**Если логов нет** — см. раздел «Нет событий / loopback» ниже.
+
 **Generate DNS** from another pod or from the node (so traffic is in the same cgroup tree):
 
 ```bash
@@ -79,7 +83,7 @@ The deployment mounts the host cgroup at `/host-cgroup` and sets `CGROUP_PATH=/h
 In another terminal, generate DNS traffic (e.g. `nslookup google.com` or `dig @8.8.8.8 google.com`). You should see lines like:
 
 ```
-egress: 00 01 01 00 00 01 00 00 00 00 00 00 06 67 6f 6f 67 6c 65 03 63 6f 6d 00 ...
+[dns] egress: 00 01 01 00 00 01 00 00 00 00 00 00 06 67 6f 6f 67 6c 65 03 63 6f 6d 00 ...
 ```
 
 (DNS header + start of query name.)
@@ -95,6 +99,22 @@ egress: 00 01 01 00 00 01 00 00 00 00 00 00 06 67 6f 6f 67 6c 65 03 63 6f 6d 00 
 - **Verifier error:** Packet parsing may need more explicit bounds checks for your kernel. On some kernels `ctx->data` may be L2 (Ethernet); then we’d need to skip 14 bytes before IP.
 - **Attach error:** Check cgroup path; try `/sys/fs/cgroup` or `cat /proc/self/cgroup` to see your cgroup. BCC API may differ: some versions use `bpf.load_func("egress", BPF.CGROUP_SKB_EGRESS)` then attach that program; adjust per your BCC.
 - **No events:** Ensure DNS traffic goes through a socket in the same cgroup (e.g. run `nslookup` in the same environment where the test runs). If the test runs in a container, attach to the host cgroup root to see host traffic, or to the container’s cgroup to see only that container.
+
+## Нет событий / loopback (No events)
+
+Если контейнер работает, но в логах нет строк с `egress:`/`ingress:`:
+
+1. **Loopback:** На многих ядрах **cgroup_skb не вызывается для трафика через loopback (lo)** так же, как для внешнего. Если `nslookup` и CoreDNS крутятся на одном узле, запрос/ответ могут идти через `lo` и не попадать в хук.
+   - **Что сделать:** генерировать DNS с **другого узла** (другой под с `nodeName` отличным от того, где CoreDNS), чтобы трафик шёл по сети, а не по loopback.
+   - Либо временно поднять внешний DNS (например `dig @8.8.8.8 google.com`) с пода — трафик до 8.8.8.8 пойдёт через интерфейс, не loopback.
+
+2. **Проверить, что хуки вообще срабатывают:** включите отладочный режим — тогда в лог пойдут **любой UDP** (не только порт 53) или **любой IP** пакет.
+   - В поде задайте переменную окружения `DEBUG=1` (любой UDP) или `DEBUG=2` (любой IP), перезапустите под и снова генерируйте трафик (например `nslookup`, или `curl`, или пинг).
+   - Если при `DEBUG=1` или `DEBUG=2` появятся строки вида `[udp] egress: ...` / `[ip] ingress: ...`, значит cgroup_skb вызывается, а фильтр по порту 53 или смещениям (L3/L4) можно подправить (например попробовать L2_OFFSET 14 в BPF, если в вашем ядре в skb приходит Ethernet).
+
+3. **Cgroup:** мы цепляемся к корню хоста (`/sys/fs/cgroup`). Поды в K8s живут в поддереве (например `kubepods.slice`), они наследуют программу. Убедитесь, что в под смонтирован именно хостовой cgroup: в deployment уже есть `hostPath: /sys/fs/cgroup` → `/host-cgroup` и `CGROUP_PATH=/host-cgroup`.
+
+4. **Сборка и образ:** после смены кода пересоберите образ и загрузите его в кластер заново (например для K3s: `docker build ...`, `docker save`, `k3s ctr images import`, затем `kubectl rollout restart deployment/cgroup-skb-test`).
 
 ## Layout
 
