@@ -51,7 +51,8 @@ int egress(struct __sk_buff *ctx)
     if (data + payload_off + 1 > data_end)
         return 1;
 
-    struct event_t ev = { .direction = 1 };
+    struct event_t ev;
+    ev.direction = 1;
     u32 avail = (u32)(data_end - data - payload_off);
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
     if (copy > 0) {
@@ -87,7 +88,8 @@ int ingress(struct __sk_buff *ctx)
     if (data + payload_off + 1 > data_end)
         return 1;
 
-    struct event_t ev = { .direction = 2 };
+    struct event_t ev;
+    ev.direction = 2;
     u32 avail = (u32)(data_end - data - payload_off);
     u32 copy  = avail > PAYLOAD_SAMPLE ? PAYLOAD_SAMPLE : avail;
     if (copy > 0) {
