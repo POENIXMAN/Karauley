@@ -30,26 +30,30 @@ sudo python3 test_cgroup_skb.py
 **Build image** (from repo root):
 
 ```bash
-docker build -f cgroup_skb_test/Dockerfile -t localhost/cgroup-skb-test:latest .
+docker build -f cgroup_skb_test/Dockerfile -t cgroup-skb-test:latest .
 ```
 
 **Deploy (with registry):** push image, set `image:` in deployment, then `kubectl apply -f cgroup_skb_test/k8s/deployment.yaml`.
 
-**K3s (no registry):** deployment uses `image: localhost/cgroup-skb-test:latest` and `imagePullPolicy: Never`. Load image on the node:
+**K3s (no registry):** Same pattern as the main helm chart (`localhost/ebpfmodule:v1.4`). Use a **versioned tag** so K3s doesn’t resolve to `docker.io/library/...` for `:latest`. Deployment uses `image: localhost/cgroup-skb-test:v1` and `imagePullPolicy: IfNotPresent`.
 
-1. **Save** (on build host; `-o` = output file, then image name):
+1. **Build and tag** (versioned tag like helm):
    ```bash
-   docker save -o cgroup-skb-test-latest.tar localhost/cgroup-skb-test:latest
+   docker build -f cgroup_skb_test/Dockerfile -t localhost/cgroup-skb-test:v1 .
    ```
-2. Copy tar to node (e.g. `scp cgroup-skb-test-latest.tar user@k8s-master:~/`).
-3. **Import** on node (use real path, not `/path/to/`):
+2. **Save** (`-o` = output file, then image name):
    ```bash
-   sudo k3s ctr --namespace=k8s.io images import /home/db-user/cgroup-skb-test-latest.tar
+   docker save -o cgroup-skb-test-v1.tar localhost/cgroup-skb-test:v1
    ```
-4. **Apply:**
+3. Copy tar to node (e.g. `scp cgroup-skb-test-v1.tar user@k8s-master:~/`).
+4. **Import** on node (use real path):
    ```bash
+   sudo k3s ctr --namespace=k8s.io images import /home/db-user/cgroup-skb-test-v1.tar
+   ```
+5. **Apply** (delete deployment first if you had a wrong image ref, then apply):
+   ```bash
+   kubectl delete deployment cgroup-skb-test -n default
    kubectl apply -f cgroup_skb_test/k8s/deployment.yaml
-   kubectl rollout restart deployment/cgroup-skb-test -n default
    ```
 
 **Logs** (payload lines):

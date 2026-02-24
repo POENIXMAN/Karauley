@@ -25,8 +25,9 @@ spec:
       hostPID: true
       dnsPolicy: ClusterFirstWithHostNet
       containers:
+        # Use versioned tag (like helm's localhost/ebpfmodule:v1.4) so K3s doesn't resolve to docker.io/library/... for :latest
         - name: test
-          image: localhost/cgroup-skb-test:latest
+          image: localhost/cgroup-skb-test:v1
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
