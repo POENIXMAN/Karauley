@@ -41,6 +41,12 @@ spec:
             - name: sys
               mountPath: /sys
               readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: src
+              mountPath: /usr/src
+              readOnly: true
       volumes:
         - name: host-cgroup
           hostPath:
@@ -49,6 +55,14 @@ spec:
         - name: sys
           hostPath:
             path: /sys
+            type: Directory
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: src
+          hostPath:
+            path: /usr/src
             type: Directory
 ---
 # Optional: DaemonSet to run test on every node
