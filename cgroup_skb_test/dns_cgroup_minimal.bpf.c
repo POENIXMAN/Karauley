@@ -19,9 +19,9 @@ static __always_inline u32 ip_hdr_len(struct iphdr *ip)
     return ((u32)(ip->ihl)) * 4;
 }
 
-/* Egress: outgoing packets from this cgroup */
-SEC("cgroup_skb/egress")
+/* Egress: outgoing packets from this cgroup (BCC uses section name for program type) */
 int egress(struct __sk_buff *ctx)
+__attribute__((section("cgroup_skb/egress")))
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
@@ -64,8 +64,8 @@ int egress(struct __sk_buff *ctx)
 }
 
 /* Ingress: incoming packets to this cgroup */
-SEC("cgroup_skb/ingress")
 int ingress(struct __sk_buff *ctx)
+__attribute__((section("cgroup_skb/ingress")))
 {
     void *data_end = (void *)(long)ctx->data_end;
     void *data     = (void *)(long)ctx->data;
