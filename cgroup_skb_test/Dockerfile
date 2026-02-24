@@ -1,4 +1,5 @@
-# Minimal image for CGROUP_SKB test in cluster
+# Minimal image for CGROUP_SKB test in cluster.
+# Same pattern as main Dockerfile: python:3.11-slim + apt BCC + PYTHONPATH so bcc is found.
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,11 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     procps \
     && rm -rf /var/lib/apt/lists/*
 
+ENV PYTHONPATH=/usr/lib/python3/dist-packages
+
 WORKDIR /app
 COPY dns_cgroup_minimal.bpf.c .
 COPY test_cgroup_skb.py .
 
-# CGROUP_PATH will be set by deployment (mount host cgroup here)
 ENV CGROUP_PATH=/host-cgroup
 
 ENTRYPOINT ["python3", "test_cgroup_skb.py"]
