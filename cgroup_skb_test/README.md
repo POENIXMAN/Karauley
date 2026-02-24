@@ -10,7 +10,7 @@ Standalone test to verify that **attaching to a cgroup** and **reading DNS paylo
 ## Unlike TC: no interface, CNI-agnostic
 
 - **TC** attaches to a **network interface** (e.g. `dev ens33`). Whoever owns that interface (e.g. Cilium) owns the qdisc → conflict, not CNI-agnostic.
-- **CGROUP_SKB** attaches to a **cgroup** (a path in cgroupfs), not to any NIC. The hook runs when a packet is associated with a socket in that cgroup, regardless of which interface it uses. So no interface binding and **CNI-agnostic** — no conflict with Cilium, Calico, etc.
+- **CGROUP_SKB** attaches to a **cgroup** (a path in cgroupfs), not to any NIC. The hook runs when a packet is associated with a socket in that cgroup, regardless of which interface it uses. So no interface binding and **CNI-agnostic** — no conflict with Cilium, Calico, etc. You can run the same DaemonSet on **any cluster** (K3s, kubeadm, EKS) as long as cgroup v2 is mounted at `/sys/fs/cgroup` (or set `CGROUP_PATH`).
 
 ## What it does
 
@@ -18,20 +18,50 @@ Standalone test to verify that **attaching to a cgroup** and **reading DNS paylo
 2. **Payload:** In the BPF program, packet is in kernel memory (`ctx->data` / `data_end`). We parse IP + UDP, check port 53, copy first 64 bytes of payload to a perf buffer and pass to Python.
 3. **Python:** Loads the BPF, attaches to cgroup, polls the perf buffer and prints received bytes (hex). If you see DNS-like bytes (e.g. transaction ID, then domain name), the approach works.
 
+## Test on a host/VM first (recommended)
+
+Testing on a plain Linux host (or VM) before the cluster is **very helpful**: no Kubernetes, no Cilium. You only verify that BPF loads, cgroup attach works, and events appear. If it works on the host, the same code is ready for the cluster; if not, you debug without cluster-specific noise. Use the "Run locally" steps below.
+
 ## Run locally (as root, on a node with cgroup v2)
+
+On the host or VM, as root:
 
 ```bash
 cd prototype_improved/cgroup_skb_test
 sudo python3 test_cgroup_skb.py
 ```
 
+In **another terminal** on the same host, generate DNS (e.g. `nslookup google.com` or `dig @8.8.8.8 google.com` to avoid loopback). You should see lines like `[dns] egress cgroup_id=...` in the first terminal. If nothing appears, try `DEBUG=1` or `DEBUG=2` (see "If it fails").
+
 ## Run in cluster (Docker + Kubernetes)
 
-**Build image** (from repo root):
+### Working solution (DaemonSet: monitor on every node)
+
+Из корня репо:
 
 ```bash
-docker build -f cgroup_skb_test/Dockerfile -t cgroup-skb-test:latest .
+docker build -f cgroup_skb_test/Dockerfile -t dns-cgroup-monitor:v1 .
 ```
+
+Для K3s без registry: `docker save -o dns-cgroup-monitor.tar dns-cgroup-monitor:v1`, скопировать на узел, затем `sudo k3s ctr --namespace=k8s.io images import dns-cgroup-monitor.tar`. Для kind: `kind load docker-image dns-cgroup-monitor:v1`.
+
+Применить DaemonSet:
+
+```bash
+kubectl apply -f cgroup_skb_test/k8s/daemonset.yaml
+```
+
+Логи (по одному поду на узел):
+
+```bash
+kubectl logs -f -l app=dns-cgroup-monitor -n default
+```
+
+В логах строки вида `[OUT] pod=cgroup_id=... | domain.name` и при длинных метках — алерт о туннелинге.
+
+### Один под (Deployment, опционально)
+
+Для теста на одном узле можно использовать тот же образ `dns-cgroup-monitor:v1` и манифест `k8s/deployment.yaml`, заменив в нём `image:` на `dns-cgroup-monitor:v1` и убрав `nodeName`, либо оставить старый образ `cgroup-skb-test` (собранный тем же Dockerfile с другим тегом).
 
 **Deploy (with registry):** push image, set `image:` in deployment, then `kubectl apply -f cgroup_skb_test/k8s/deployment.yaml`.
 
@@ -72,7 +102,7 @@ kubectl logs -f deployment/cgroup-skb-test -n default
 kubectl run -it --rm dns-gen --image=busybox:1.36 --restart=Never -- nslookup google.com
 ```
 
-The deployment mounts the host cgroup at `/host-cgroup` and sets `CGROUP_PATH=/host-cgroup`, so the test attaches to the node’s cgroup root and sees DNS from the node and from pods.
+The deployment mounts the host cgroup at `/host-cgroup` and sets `CGROUP_PATH=/host-cgroup`, so the test attaches to the node’s cgroup root and sees DNS from the node and from **all pods** (pods live under `kubepods.slice` in the same hierarchy). Each event includes **cgroup_id** — same id = same pod, so you can identify the active or infected pod.
 
 **Kind / Minikube:** load the image into the cluster, e.g. `kind load docker-image cgroup-skb-test:latest` or `minikube image load cgroup-skb-test:latest`.
 
@@ -83,10 +113,10 @@ The deployment mounts the host cgroup at `/host-cgroup` and sets `CGROUP_PATH=/h
 In another terminal, generate DNS traffic (e.g. `nslookup google.com` or `dig @8.8.8.8 google.com`). You should see lines like:
 
 ```
-[dns] egress: 00 01 01 00 00 01 00 00 00 00 00 00 06 67 6f 6f 67 6c 65 03 63 6f 6d 00 ...
+[dns] egress cgroup_id=12345: 00 01 01 00 00 01 00 00 00 00 00 00 06 67 6f 6f 67 6c 65 03 63 6f 6d 00 ...
 ```
 
-(DNS header + start of query name.)
+(DNS header + start of query name.) Each line includes `cgroup_id=<id>`: the same id corresponds to the same pod, so you can see which pod generated the DNS.
 
 ## Requirements
 
@@ -116,9 +146,13 @@ In another terminal, generate DNS traffic (e.g. `nslookup google.com` or `dig @8
 
 4. **Сборка и образ:** после смены кода пересоберите образ и загрузите его в кластер заново (например для K3s: `docker build ...`, `docker save`, `k3s ctr images import`, затем `kubectl rollout restart deployment/cgroup-skb-test`).
 
-## Layout
+**Приоритет — трафик из подов:** цепляемся к корню хоста `/sys/fs/cgroup`. Поды лежат в том же дереве (`kubepods.slice` → …). В событии есть **cgroup_id**: один и тот же id = один под (на egress задаётся, на ingress на части ядер может быть 0). По нему можно определить под-источник DNS.
 
-- `dns_cgroup_minimal.bpf.c` — BPF: egress (and ingress) hook, parse IP/UDP, copy 64 bytes payload to perf buffer.
-- `test_cgroup_skb.py` — Python: load BPF, open cgroup, attach, poll and print.
-- `Dockerfile` — image with BCC and the test files.
-- `k8s/deployment.yaml` — Deployment (1 replica) with host cgroup mount and privileged; optional DaemonSet in comments.
+## Layout (working solution: two files + Docker + DaemonSet)
+
+- **`dns_cgroup_working.bpf.c`** — BPF: egress/ingress, DNS port 53, cgroup_id в событии (отдельный файл для working.py).
+- **`working.py`** — Python: загружает BPF из файла (или inline), attach к cgroup, резолвер cgroup_id → pod, вывод и алерт по длинным меткам.
+- `Dockerfile` — образ с BCC, `working.py` и `dns_cgroup_working.bpf.c`; ENTRYPOINT `python3 working.py`.
+- `docker-compose.yml` — локальный запуск с монтом хостового cgroup (из корня репо: `docker compose -f cgroup_skb_test/docker-compose.yml up --build`).
+- `k8s/daemonset.yaml` — **DaemonSet**: монитор на каждом узле, образ `dns-cgroup-monitor:v1`, примонтирован `/sys/fs/cgroup` → `/host-cgroup`.
+- `k8s/deployment.yaml` — Deployment (один под, для теста); минимальный тест — `dns_cgroup_minimal.bpf.c` + `test_cgroup_skb.py`.

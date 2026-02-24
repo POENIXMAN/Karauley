@@ -1,5 +1,6 @@
-# Minimal image for CGROUP_SKB test in cluster.
-# Same pattern as main Dockerfile: python:3.11-slim + apt BCC + PYTHONPATH so bcc is found.
+# DNS monitor via cgroup_skb (working.py + dns_cgroup_working.bpf.c).
+# Build from repo root: docker build -f cgroup_skb_test/Dockerfile -t dns-cgroup-monitor:latest .
+# Or from this dir: docker build -f Dockerfile -t dns-cgroup-monitor:latest ..
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,9 +13,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONPATH=/usr/lib/python3/dist-packages
 
 WORKDIR /app
-COPY dns_cgroup_minimal.bpf.c .
-COPY test_cgroup_skb.py .
+# Build from repo root:  docker build -f cgroup_skb_test/Dockerfile -t dns-cgroup-monitor:v1 .
+# Build from this dir:  docker build -t dns-cgroup-monitor:v1 .  (copies local files)
+COPY cgroup_skb_test/working.py cgroup_skb_test/dns_cgroup_working.bpf.c ./
 
 ENV CGROUP_PATH=/host-cgroup
 
-ENTRYPOINT ["python3", "test_cgroup_skb.py"]
+ENTRYPOINT ["python3", "working.py"]
