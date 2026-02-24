@@ -12,14 +12,28 @@ CGROUP_PATH = os.environ.get("CGROUP_PATH", "/sys/fs/cgroup")
 def main():
     try:
         from bcc import BPF
-    except ImportError:
+        try:
+            from bcc import BPFAttachType
+        except ImportError:
+            BPFAttachType = None
+    except ImportError as e:
         print("Need BCC: pip install bpfcc (or python3-bpfcc)", file=sys.stderr)
         sys.exit(1)
+
+    # Log BCC version and available attach helpers
+    try:
+        import bcc.version
+        print(f"[*] BCC version: {getattr(bcc.version, '__version__', 'unknown')}")
+    except Exception:
+        print("[*] BCC version: unknown")
+    print(f"[*] BPF.CGROUP_SKB = {getattr(BPF, 'CGROUP_SKB', 'N/A')}")
+    print(f"[*] BPFAttachType: CGROUP_INET_EGRESS={getattr(BPFAttachType, 'CGROUP_INET_EGRESS', None)}, CGROUP_INET_INGRESS={getattr(BPFAttachType, 'CGROUP_INET_INGRESS', None)}")
+    print(f"[*] Has attach_func: {hasattr(BPF, 'attach_func')}, Has attach_cgroup: {hasattr(BPF, 'attach_cgroup')}")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     bpf_src = os.path.join(script_dir, "dns_cgroup_minimal.bpf.c")
     if not os.path.isfile(bpf_src):
-        print(f"BPF source not found: {bpf_src}", file=sys.stderr)
+        print(f"[!] BPF source not found: {bpf_src}", file=sys.stderr)
         sys.exit(1)
 
     with open(bpf_src, "r") as f:
@@ -27,31 +41,39 @@ def main():
 
     print(f"[*] Loading BPF from {bpf_src} ...")
     bpf = BPF(text=text)
-    print("[*] Opening cgroup:", CGROUP_PATH)
+    print("[*] BPF loaded successfully")
 
+    print(f"[*] Opening cgroup: {CGROUP_PATH}")
     try:
         cgroup_fd = os.open(CGROUP_PATH, os.O_RDONLY)
     except OSError as e:
         print(f"[!] Failed to open cgroup {CGROUP_PATH}: {e}", file=sys.stderr)
         print("    Try: mount | grep cgroup2  and use that mount point", file=sys.stderr)
         sys.exit(1)
+    print(f"[*] Cgroup fd: {cgroup_fd}")
 
-    # Attach egress and ingress (BCC uses attach_cgroup with program name and attach type)
+    # BCC uses load_func(prog_type=CGROUP_SKB, attach_type=...) then attach_func(fn, cgroup_fd, attach_type)
+    if BPFAttachType is None:
+        print("[!] BPFAttachType not available; cannot attach cgroup programs", file=sys.stderr)
+        os.close(cgroup_fd)
+        sys.exit(1)
+    at_egress = BPFAttachType.CGROUP_INET_EGRESS   # 1
+    at_ingress = BPFAttachType.CGROUP_INET_INGRESS  # 0
+
     try:
-        # BCC attach type constants; fallback to int if not in older BCC
-        try:
-            from bcc import BPFAttachType
-            at_egress = getattr(BPFAttachType, "CGROUP_INET_EGRESS", 27)
-            at_ingress = getattr(BPFAttachType, "CGROUP_INET_INGRESS", 26)
-        except (ImportError, AttributeError):
-            at_egress = 27   # BPF_CGROUP_INET_EGRESS
-            at_ingress = 26  # BPF_CGROUP_INET_INGRESS
-
-        bpf.attach_cgroup("egress", cgroup_fd, at_egress)
-        bpf.attach_cgroup("ingress", cgroup_fd, at_ingress)
+        print("[*] Loading egress program (CGROUP_SKB, CGROUP_INET_EGRESS) ...")
+        fn_egress = bpf.load_func(b"egress", BPF.CGROUP_SKB, attach_type=at_egress)
+        print("[*] Loading ingress program (CGROUP_SKB, CGROUP_INET_INGRESS) ...")
+        fn_ingress = bpf.load_func(b"ingress", BPF.CGROUP_SKB, attach_type=at_ingress)
+        print("[*] Attaching egress to cgroup ...")
+        BPF.attach_func(fn_egress, cgroup_fd, at_egress)
+        print("[*] Attaching ingress to cgroup ...")
+        BPF.attach_func(fn_ingress, cgroup_fd, at_ingress)
         print("[+] Attached egress and ingress to cgroup")
     except Exception as e:
-        print(f"[!] Attach failed: {e}", file=sys.stderr)
+        print(f"[!] Attach failed: {type(e).__name__}: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
         os.close(cgroup_fd)
         sys.exit(1)
     os.close(cgroup_fd)
@@ -76,7 +98,7 @@ def main():
         print(f"{label}: {hex_str}")
 
     bpf["events"].open_perf_buffer(on_event)
-    print("[*] Polling (generate DNS traffic, e.g. nslookup google.com). Ctrl+C to stop.")
+    print("[*] Perf buffer opened. Polling for DNS events (generate traffic, e.g. nslookup google.com). Ctrl+C to stop.")
     while True:
         try:
             bpf.perf_buffer_poll(300)
