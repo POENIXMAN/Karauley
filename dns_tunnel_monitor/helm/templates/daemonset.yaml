@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "dns-tunnel-monitor.fullname" . }}
+  namespace: {{ include "dns-tunnel-monitor.namespace" . }}
+  labels:
+    {{- include "dns-tunnel-monitor.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "dns-tunnel-monitor.selectorLabels" . | nindent 6 }}
+  updateStrategy:
+    type: {{ .Values.daemonset.updateStrategy.type }}
+    {{- if eq .Values.daemonset.updateStrategy.type "RollingUpdate" }}
+    rollingUpdate:
+      maxUnavailable: {{ .Values.daemonset.updateStrategy.rollingUpdate.maxUnavailable }}
+    {{- end }}
+  template:
+    metadata:
+      labels:
+        {{- include "dns-tunnel-monitor.selectorLabels" . | nindent 8 }}
+      {{- if .Values.prometheus.enabled }}
+      annotations:
+        prometheus.io/scrape: "{{ .Values.prometheus.scrape }}"
+        prometheus.io/port: "{{ .Values.prometheus.port }}"
+        prometheus.io/path: "{{ .Values.prometheus.path }}"
+      {{- end }}
+    spec:
+      hostNetwork: {{ .Values.daemonset.hostNetwork }}
+      hostPID: {{ .Values.daemonset.hostPID }}
+      dnsPolicy: {{ .Values.daemonset.dnsPolicy }}
+      containers:
+        - name: monitor
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            privileged: {{ .Values.daemonset.securityContext.privileged }}
+            runAsUser: {{ .Values.daemonset.securityContext.runAsUser }}
+            runAsGroup: {{ .Values.daemonset.securityContext.runAsGroup }}
+          ports:
+            - containerPort: {{ .Values.service.port }}
+              name: {{ .Values.service.name }}
+          env:
+            - name: CGROUP_PATH
+              value: {{ .Values.env.CGROUP_PATH | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.env.METRICS_PORT | quote }}
+          volumeMounts:
+            - name: host-cgroup
+              mountPath: /host-cgroup
+              readOnly: false
+            - name: sys
+              mountPath: /sys
+              readOnly: true
+            - name: modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: usr-src
+              mountPath: /usr/src
+              readOnly: true
+          resources:
+            {{- toYaml .Values.daemonset.resources | nindent 12 }}
+          livenessProbe:
+            {{- toYaml .Values.daemonset.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.daemonset.readinessProbe | nindent 12 }}
+      volumes:
+        - name: host-cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: sys
+          hostPath:
+            path: /sys
+            type: Directory
+        - name: modules
+          hostPath:
+            path: /lib/modules
+            type: Directory
+        - name: usr-src
+          hostPath:
+            path: /usr/src
+            type: Directory
+      tolerations:
+        {{- toYaml .Values.daemonset.tolerations | nindent 8 }}
+      {{- if .Values.daemonset.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.daemonset.nodeSelector | nindent 8 }}
+      {{- end }}

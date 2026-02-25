@@ -1,0 +1,12 @@
+apiVersion: v2
+name: dns-tunnel-monitor
+description: DNS Tunnel Detector (cgroup_skb) for Kubernetes
+type: application
+version: 1.0.0
+appVersion: "1.0"
+keywords:
+  - dns
+  - security
+  - ebpf
+  - cgroup
+  - tunnel-detection

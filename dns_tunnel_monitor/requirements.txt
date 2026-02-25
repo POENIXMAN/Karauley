@@ -1,0 +1,3 @@
+# For local dev / pip install (BCC usually via system: python3-bpfcc)
+prometheus_client>=0.17.0
+flask>=2.0

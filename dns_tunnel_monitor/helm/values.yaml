@@ -1,0 +1,67 @@
+global:
+  namespace: default
+
+image:
+  repository: localhost/dns-tunnel-monitor
+  tag: v1
+  pullPolicy: IfNotPresent
+
+nameOverride: ""
+fullnameOverride: ""
+
+daemonset:
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  securityContext:
+    privileged: true
+    runAsUser: 0
+    runAsGroup: 0
+  hostNetwork: true
+  hostPID: true
+  dnsPolicy: ClusterFirstWithHostNet
+  resources:
+    limits:
+      memory: 512Mi
+      cpu: 500m
+    requests:
+      memory: 128Mi
+      cpu: 100m
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: 9999
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  readinessProbe:
+    httpGet:
+      path: /ready
+      port: 9999
+    initialDelaySeconds: 5
+    periodSeconds: 5
+  tolerations:
+    - operator: Exists
+  nodeSelector: {}
+
+service:
+  enabled: true
+  type: ClusterIP
+  clusterIP: None
+  port: 9999
+  targetPort: 9999
+  name: metrics
+
+prometheus:
+  enabled: true
+  scrape: true
+  port: 9999
+  path: /metrics
+
+env:
+  CGROUP_PATH: /host-cgroup
+  METRICS_PORT: "9999"
+
+labels:
+  app.kubernetes.io/name: dns-tunnel-monitor
+  app.kubernetes.io/component: security
