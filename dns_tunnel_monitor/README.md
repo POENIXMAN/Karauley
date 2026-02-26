@@ -112,3 +112,16 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 - `dns_domains_unique`
 
 В Grafana по `client_pod` можно смотреть, какой pod генерирует DNS и алерты по туннелям.
+
+### Метрики не видны в Grafana
+
+Grafana показывает только то, что уже есть в Prometheus. Если метрик с префиксом `dns_` нет:
+
+1. **Prometheus должен скрейпить поды.** На подах стоят аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` — они работают только если Prometheus настроен на discovery подов с этими аннотациями.
+2. **Если у вас Prometheus Operator** (kube-prometheus-stack, prometheus-operator) — он по умолчанию не смотрит на аннотации подов. Нужен **ServiceMonitor**. Включите его и переустановите чарт:
+   ```bash
+   helm upgrade dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default --set prometheus.serviceMonitor.enabled=true
+   ```
+   Если ваш Prometheus выбирает ServiceMonitor по label (например `release: prometheus`), добавьте нужный label в `prometheus.serviceMonitor.labels` в values или через `--set`.
+3. **Проверка в Prometheus:** UI → Status → Targets — должны быть цели для `dns-tunnel-monitor` (порт 9999, path `/metrics`). В разделе Graph/Explore запрос `dns_queries_total` или `{__name__=~"dns_.*"}` должен что-то вернуть.
+4. **В Grafana:** Data source — ваш Prometheus. В Explore или в панели запрос, например: `sum(dns_queries_total) by (instance)` или `dns_suspicious_total`.

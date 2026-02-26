@@ -1,0 +1,18 @@
+{{- $sm := .Values.prometheus.serviceMonitor | default dict }}
+{{- if and .Values.service.enabled .Values.prometheus.enabled $sm.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "dns-tunnel-monitor.fullname" . }}
+  namespace: {{ include "dns-tunnel-monitor.namespace" . }}
+  labels:
+    {{- include "dns-tunnel-monitor.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "dns-tunnel-monitor.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: {{ .Values.service.name }}
+      path: {{ .Values.prometheus.path }}
+      interval: {{ $sm.interval | default "30s" }}
+{{- end }}

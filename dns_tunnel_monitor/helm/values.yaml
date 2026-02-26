@@ -57,6 +57,10 @@ prometheus:
   scrape: true
   port: 9999
   path: /metrics
+  # ServiceMonitor for Prometheus Operator (kube-prometheus-stack etc.)
+  serviceMonitor:
+    enabled: true
+    interval: 30s
 
 env:
   CGROUP_PATH: /host-cgroup
