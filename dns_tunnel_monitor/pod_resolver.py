@@ -14,6 +14,14 @@ def _debug_log(msg):
     if _DEBUG:
         print(f"[pod_resolver] {msg}", file=sys.stderr, flush=True)
 
+_startup_logged = False
+
+def _debug_log_startup():
+    global _startup_logged
+    if _DEBUG and not _startup_logged:
+        _startup_logged = True
+        print("[pod_resolver] DEBUG_POD_RESOLVER=1 — resolution failures will be logged here", file=sys.stderr, flush=True)
+
 BPF_CGROUP_GET_FD_BY_ID = 26
 _SYS_bpf = {"x86_64": 321, "aarch64": 280, "armv7l": 386, "i686": 357}
 _bpf_get_fd = None
@@ -126,6 +134,7 @@ class PodResolver:
         return out
 
     def _do_resolve(self, cgroup_id):
+        _debug_log_startup()
         fd = _bpf_cgroup_get_fd_by_id(cgroup_id)
         if fd < 0:
             _debug_log(f"cgroup_id={cgroup_id}: bpf cgroup_get_fd_by_id failed (fd<0)")
