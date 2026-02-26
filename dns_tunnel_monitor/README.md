@@ -118,10 +118,12 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 Grafana показывает только то, что уже есть в Prometheus. Если метрик с префиксом `dns_` нет:
 
 1. **Prometheus должен скрейпить поды.** На подах стоят аннотации `prometheus.io/scrape`, `prometheus.io/port`, `prometheus.io/path` — они работают только если Prometheus настроен на discovery подов с этими аннотациями.
-2. **Если у вас Prometheus Operator** (kube-prometheus-stack, prometheus-operator) — он по умолчанию не смотрит на аннотации подов. Нужен **ServiceMonitor**. Включите его и переустановите чарт:
+2. **Если у вас Prometheus Operator** (kube-prometheus-stack, prometheus-operator) — включите ServiceMonitor и **обязательно укажите label, по которому ваш Prometheus выбирает ServiceMonitor** (иначе Operator проигнорирует наш). Обычно это `release: <имя релиза Prometheus>`:
    ```bash
-   helm upgrade dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default --set prometheus.serviceMonitor.enabled=true
+   helm upgrade dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default \
+     --set prometheus.serviceMonitor.enabled=true \
+     --set prometheus.serviceMonitor.labels.release=kube-prometheus-stack
    ```
-   Если ваш Prometheus выбирает ServiceMonitor по label (например `release: prometheus`), добавьте нужный label в `prometheus.serviceMonitor.labels` в values или через `--set`.
+   Имя релиза смотри в `helm list -A` (релиз со стеком Prometheus/Grafana). В values можно задать `prometheus.serviceMonitor.labels.release: kube-prometheus-stack`.
 3. **Проверка в Prometheus:** UI → Status → Targets — должны быть цели для `dns-tunnel-monitor` (порт 9999, path `/metrics`). В разделе Graph/Explore запрос `dns_queries_total` или `{__name__=~"dns_.*"}` должен что-то вернуть.
 4. **В Grafana:** Data source — ваш Prometheus. В Explore или в панели запрос, например: `sum(dns_queries_total) by (instance)` или `dns_suspicious_total`.

@@ -61,6 +61,11 @@ prometheus:
   serviceMonitor:
     enabled: true
     interval: 30s
+    # Add labels so your Prometheus selects this ServiceMonitor (often required).
+    # Example for kube-prometheus-stack: release: kube-prometheus-stack
+    labels: {}
+    # labels:
+    #   release: kube-prometheus-stack
 
 env:
   CGROUP_PATH: /host-cgroup

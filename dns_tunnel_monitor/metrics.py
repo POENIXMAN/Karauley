@@ -30,7 +30,18 @@ if FLASK_AVAILABLE:
     def metrics_route():
         return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
+    def _init_metrics():
+        """Expose dns_* series from first scrape (prometheus_client only creates series on first inc/set)."""
+        dns_domains_unique.set(0)
+        dns_queries_total.labels(protocol="UDP").inc(0)
+        dns_responses_total.labels(protocol="UDP").inc(0)
+        dns_suspicious_total.labels(threat_type="UNKNOWN").inc(0)
+        dns_events_by_pod.labels(client_pod="none", direction="query").inc(0)
+        dns_events_by_pod.labels(client_pod="none", direction="response").inc(0)
+        dns_events_by_process.labels(process="unknown", client_pod="none", direction="query").inc(0)
+
     def start_http_server(port=9999, host='0.0.0.0'):
+        _init_metrics()
         app.run(host=host, port=port, debug=False, threaded=True, use_reloader=False)
 else:
     dns_queries_total = None

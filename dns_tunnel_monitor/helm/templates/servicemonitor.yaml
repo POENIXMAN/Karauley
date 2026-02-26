@@ -7,6 +7,9 @@ metadata:
   namespace: {{ include "dns-tunnel-monitor.namespace" . }}
   labels:
     {{- include "dns-tunnel-monitor.labels" . | nindent 4 }}
+    {{- with $sm.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   selector:
     matchLabels:
