@@ -26,6 +26,10 @@ spec:
         prometheus.io/path: "{{ .Values.prometheus.path }}"
       {{- end }}
     spec:
+      {{- if .Values.rbac.enabled }}
+      serviceAccountName: {{ include "dns-tunnel-monitor.fullname" . }}
+      automountServiceAccountToken: true
+      {{- end }}
       hostNetwork: {{ .Values.daemonset.hostNetwork }}
       hostPID: {{ .Values.daemonset.hostPID }}
       dnsPolicy: {{ .Values.daemonset.dnsPolicy }}

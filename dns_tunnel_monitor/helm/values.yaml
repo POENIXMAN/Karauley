@@ -66,6 +66,11 @@ prometheus:
     labels:
       release: prometheus
 
+# RBAC: ServiceAccount + ClusterRole (list/get pods) so the monitor can resolve cgroup_id -> namespace/podname.
+# If disabled, metrics will show "cgroup_id=..." instead of "default/nginx-xxx".
+rbac:
+  enabled: true
+
 env:
   CGROUP_PATH: /host-cgroup
   METRICS_PORT: "9999"

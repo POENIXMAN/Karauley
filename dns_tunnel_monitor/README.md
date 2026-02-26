@@ -113,6 +113,16 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 
 В Grafana по `client_pod` можно смотреть, какой pod генерирует DNS и алерты по туннелям.
 
+### Как показывать namespace/pod вместо cgroup_id
+
+Метрика `client_pod` может быть в виде **`namespace/podname`** (удобно в дашбордах) или **`cgroup_id=...`** (если разрешение по API недоступно). Чтобы получать имена подов:
+
+1. **Включите RBAC в чарте** — в `helm/values.yaml` должно быть `rbac.enabled: true` (по умолчанию включено). Тогда создаётся ServiceAccount и права на `list/get pods` по API; под монитора получает токен и дергает Kubernetes API, чтобы по UID из cgroup найти `namespace/name` пода.
+2. **После `helm upgrade`** поды перезапустятся с новым ServiceAccount. Новые события начнут приходить с `client_pod=default/nginx-xxx` вместо `cgroup_id=24346`. Старые метрики (по cgroup_id) останутся в истории; новые лейблы появятся по мере поступления трафика.
+3. Если после включения RBAC по-прежнему видите только `cgroup_id` или `pod_uid:...`: проверьте, что на узле используется cgroup v2 и путь cgroup содержит `kubepods` (формат типа `kubepods-pod<uid>.slice`). В логах пода ошибок API быть не должно.
+
+При необходимости отключить доступ к API (например, из соображений безопасности) задайте `rbac.enabled: false` — тогда будет использоваться только `cgroup_id=...` или `pod_uid:...`.
+
 ### Метрики не видны в Grafana
 
 Grafana показывает только то, что уже есть в Prometheus. Если метрик с префиксом `dns_` нет:
