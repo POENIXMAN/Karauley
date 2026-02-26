@@ -58,14 +58,13 @@ prometheus:
   port: 9999
   path: /metrics
   # ServiceMonitor for Prometheus Operator (kube-prometheus-stack etc.)
+  # Важно: без нужного label Prometheus не будет скрейпить этот ServiceMonitor — в UI не появятся цели и метрик не будет.
   serviceMonitor:
     enabled: true
     interval: 30s
-    # Add labels so your Prometheus selects this ServiceMonitor (often required).
-    # Example for kube-prometheus-stack: release: kube-prometheus-stack
-    labels: {}
-    # labels:
-    #   release: kube-prometheus-stack
+    # Label должен совпадать с именем релиза Prometheus из helm list -A (у вас: prometheus).
+    labels:
+      release: prometheus
 
 env:
   CGROUP_PATH: /host-cgroup

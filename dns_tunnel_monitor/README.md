@@ -127,3 +127,29 @@ Grafana показывает только то, что уже есть в Promet
    Имя релиза смотри в `helm list -A` (релиз со стеком Prometheus/Grafana). В values можно задать `prometheus.serviceMonitor.labels.release: kube-prometheus-stack`.
 3. **Проверка в Prometheus:** UI → Status → Targets — должны быть цели для `dns-tunnel-monitor` (порт 9999, path `/metrics`). В разделе Graph/Explore запрос `dns_queries_total` или `{__name__=~"dns_.*"}` должен что-то вернуть.
 4. **В Grafana:** Data source — ваш Prometheus. В Explore или в панели запрос, например: `sum(dns_queries_total) by (instance)` или `dns_suspicious_total`.
+
+### Отладка по шагам (если в мониторинге пусто, а в логах пода видны UDP QUERY/RESPONSE)
+
+Под уже получает события (в логах есть `UDP QUERY` / `UDP RESPONSE`), значит метрики в приложении обновляются. Нужно проверить, что Prometheus до них доходит.
+
+1. **Проверить, что `/metrics` отдаёт данные из пода**
+   ```bash
+   # Взять любой под DaemonSet и запросить /metrics изнутри
+   POD=$(kubectl get pods -l app.kubernetes.io/name=dns-tunnel-monitor -n default -o jsonpath='{.items[0].metadata.name}')
+   kubectl exec -n default "$POD" -- curl -s http://127.0.0.1:9999/metrics | head -80
+   ```
+   Должны быть строки `dns_queries_total`, `dns_responses_total` и т.д. Если их нет — проблема в приложении (метрики не экспортируются). Если есть — идём дальше.
+
+2. **Проверить, что ServiceMonitor подхватывается Prometheus**
+   У Prometheus Operator есть `serviceMonitorSelector`: он выбирает только те ServiceMonitor, у которых есть нужные labels. Если у вас **kube-prometheus-stack**:
+   ```bash
+   helm upgrade dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default \
+     --set prometheus.serviceMonitor.labels.release=kube-prometheus-stack
+   ```
+   Имя релиза стека смотрите: `helm list -A | grep prometheus` (часто `kube-prometheus-stack` или `prometheus`). После апгрейда подождите 1–2 минуты и проверьте цели в Prometheus.
+
+3. **Проверить цели в Prometheus**
+   Prometheus UI → **Status → Targets**. Найти цели с именем/меткой `dns-tunnel-monitor` или job'ом для этого сервиса. Статус должен быть **UP**. Если целей нет — ServiceMonitor не выбран (вернуться к шагу 2). Если цель **Down** — проверить сеть/порт (под с `hostNetwork: true` слушает на порту узла).
+
+4. **Проверить запрос в Prometheus**
+   В Prometheus → **Graph** или **Explore** выполнить: `dns_queries_total` или `{__name__=~"dns_.*"}`. Должны появиться ряды. Если целей UP нет или выборка по времени пустая — метрики в Grafana не появятся.
