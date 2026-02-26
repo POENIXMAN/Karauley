@@ -1,5 +1,6 @@
 """Resolve cgroup_id to ns/podname (priority) or cgroup_id=... / host."""
 import os
+import stat
 import sys
 import ctypes
 import json
@@ -50,6 +51,43 @@ def _bpf_cgroup_get_fd_by_id(cgroup_id):
         except OSError:
             _bpf_get_fd = lambda _: -1
     return _bpf_get_fd(cgroup_id)
+
+
+def _find_cgroup_path_by_id(cgroup_id, root=None, max_dirs=50000):
+    """
+    Fallback when bpf_cgroup_get_fd_by_id fails (e.g. container cgroup namespace).
+    Walk cgroup fs (CGROUP_PATH) and find directory with inode == cgroup_id (cgroup v2).
+    """
+    if root is None:
+        root = os.environ.get("CGROUP_PATH", "/sys/fs/cgroup")
+    if not os.path.isdir(root):
+        return None
+    count = 0
+    try:
+        for dirpath, dirnames, _ in os.walk(root, topdown=True):
+            if count >= max_dirs:
+                break
+            try:
+                st = os.stat(dirpath)
+                if stat.S_ISDIR(st.st_mode) and st.st_ino == cgroup_id:
+                    return dirpath
+            except (OSError, FileNotFoundError):
+                pass
+            count += 1
+            for d in dirnames:
+                if count >= max_dirs:
+                    break
+                path = os.path.join(dirpath, d)
+                try:
+                    st = os.stat(path)
+                    if stat.S_ISDIR(st.st_mode) and st.st_ino == cgroup_id:
+                        return path
+                except (OSError, FileNotFoundError):
+                    continue
+                count += 1
+    except (OSError, FileNotFoundError):
+        pass
+    return None
 
 
 def _cgroup_path_from_fd(fd):
@@ -135,28 +173,33 @@ class PodResolver:
 
     def _do_resolve(self, cgroup_id):
         _debug_log_startup()
+        path = None
         fd = _bpf_cgroup_get_fd_by_id(cgroup_id)
-        if fd < 0:
-            _debug_log(f"cgroup_id={cgroup_id}: bpf cgroup_get_fd_by_id failed (fd<0)")
-            return f"cgroup_id={cgroup_id}"
-        try:
-            path = _cgroup_path_from_fd(fd)
-            if not path:
-                _debug_log(f"cgroup_id={cgroup_id}: could not read cgroup path from fd")
-                return f"cgroup_id={cgroup_id}"
-            if "kubepods" not in path:
-                _debug_log(f"cgroup_id={cgroup_id}: path has no 'kubepods' (not a pod?): {path[:120]}")
-                return f"cgroup_id={cgroup_id}"
-            uid = _pod_uid_from_cgroup_path(path)
-            if not uid:
-                _debug_log(f"cgroup_id={cgroup_id}: no pod UID in path (expected -pod<uid>.slice): {path[:120]}")
-                return f"cgroup_id={cgroup_id}"
-            ns_name = _k8s_resolve_uid_to_ns_name(uid)
-            if ns_name:
-                return ns_name
-            return f"pod_uid:{uid}"
-        finally:
+        if fd >= 0:
             try:
-                os.close(fd)
-            except OSError:
-                pass
+                path = _cgroup_path_from_fd(fd)
+            finally:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if not path:
+            # Fallback: container cgroup namespace often blocks bpf_cgroup_get_fd_by_id.
+            # Walk host cgroup fs (CGROUP_PATH=/host-cgroup) and find dir with inode == cgroup_id.
+            path = _find_cgroup_path_by_id(cgroup_id)
+            if path and _DEBUG:
+                _debug_log(f"cgroup_id={cgroup_id}: resolved via cgroup fs walk (bpf fd failed)")
+        if not path:
+            _debug_log(f"cgroup_id={cgroup_id}: bpf cgroup_get_fd_by_id failed and no path found in CGROUP_PATH")
+            return f"cgroup_id={cgroup_id}"
+        if "kubepods" not in path:
+            _debug_log(f"cgroup_id={cgroup_id}: path has no 'kubepods' (not a pod?): {path[:120]}")
+            return f"cgroup_id={cgroup_id}"
+        uid = _pod_uid_from_cgroup_path(path)
+        if not uid:
+            _debug_log(f"cgroup_id={cgroup_id}: no pod UID in path (expected -pod<uid>.slice): {path[:120]}")
+            return f"cgroup_id={cgroup_id}"
+        ns_name = _k8s_resolve_uid_to_ns_name(uid)
+        if ns_name:
+            return ns_name
+        return f"pod_uid:{uid}"
