@@ -123,6 +123,34 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 
 При необходимости отключить доступ к API (например, из соображений безопасности) задайте `rbac.enabled: false` — тогда будет использоваться только `cgroup_id=...` или `pod_uid:...`.
 
+### Отладка: в метриках по-прежнему «cgroup_id» или «unknown @ cgroup_id=...»
+
+Включите лог резолвера и посмотрите логи пода — там будет причина, по которой cgroup_id не превратился в `namespace/podname`:
+
+1. В `helm/values.yaml` в секции `env` раскомментируйте и установите:
+   ```yaml
+   env:
+     DEBUG_POD_RESOLVER: "1"
+   ```
+2. Обновите релиз и перезапустите поды: `helm upgrade dns-tunnel-monitor ./helm -n default`
+3. Смотрите логи пода (по мере появления DNS-трафика будут строки `[pod_resolver] ...`):
+   ```bash
+   kubectl logs -n default -l app.kubernetes.io/name=dns-tunnel-monitor -f
+   ```
+
+Типичные сообщения и что делать:
+
+| Сообщение | Причина | Действие |
+|-----------|--------|----------|
+| `KUBERNETES_SERVICE_HOST not set` | Под не в кластере или не видит API | Проверьте, что под запущен в K8s и не переопределяете env |
+| `serviceaccount token not mounted` | Нет смонтированного токена | Включите `rbac.enabled: true`, задайте `serviceAccountName` в DaemonSet |
+| `API HTTP error: 403` | Нет прав на list/get pods | Проверьте ClusterRole/ClusterRoleBinding и что под использует нужный ServiceAccount |
+| `path has no 'kubepods'` | Cgroup не от Kubernetes (системный процесс или другой runtime) | Для таких процессов нормально показывать `cgroup_id=...` |
+| `no pod UID in path (expected -pod<uid>.slice)` | Формат cgroup на узле другой (например, cgroup v1 или другой runtime) | Сравните путь в логе с реальной структурой под host: `ls /host-cgroup/` или `ls /sys/fs/cgroup/` на узле |
+| `no pod with UID prefix '...' in API list` | UID из cgroup не найден среди подов (лимит 500, или под уже удалён) | Для больших кластеров может понадобиться увеличить limit или пагинацию в коде |
+
+После отладки уберите `DEBUG_POD_RESOLVER` или поставьте пустое значение, чтобы не засорять логи.
+
 ### Метрики не видны в Grafana
 
 Grafana показывает только то, что уже есть в Prometheus. Если метрик с префиксом `dns_` нет:

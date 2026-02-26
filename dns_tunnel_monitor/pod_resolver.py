@@ -1,10 +1,18 @@
 """Resolve cgroup_id to ns/podname (priority) or cgroup_id=... / host."""
 import os
+import sys
 import ctypes
 import json
 import ssl
 import urllib.error
 import urllib.request
+
+# Set DEBUG_POD_RESOLVER=1 in the pod to log why resolution falls back to cgroup_id.
+_DEBUG = os.environ.get("DEBUG_POD_RESOLVER", "").strip().lower() in ("1", "true", "yes")
+
+def _debug_log(msg):
+    if _DEBUG:
+        print(f"[pod_resolver] {msg}", file=sys.stderr, flush=True)
 
 BPF_CGROUP_GET_FD_BY_ID = 26
 _SYS_bpf = {"x86_64": 321, "aarch64": 280, "armv7l": 386, "i686": 357}
@@ -69,7 +77,11 @@ def _pod_uid_from_cgroup_path(path):
 
 
 def _k8s_resolve_uid_to_ns_name(uid_12):
-    if not os.environ.get("KUBERNETES_SERVICE_HOST") or not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+    if not os.environ.get("KUBERNETES_SERVICE_HOST"):
+        _debug_log("KUBERNETES_SERVICE_HOST not set (not in cluster?)")
+        return None
+    if not os.path.exists("/var/run/secrets/kubernetes.io/serviceaccount/token"):
+        _debug_log("serviceaccount token not mounted at /var/run/secrets/kubernetes.io/serviceaccount/token")
         return None
     try:
         with open("/var/run/secrets/kubernetes.io/serviceaccount/token", "r") as f:
@@ -82,15 +94,19 @@ def _k8s_resolve_uid_to_ns_name(uid_12):
         req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
         with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
             data = json.loads(resp.read().decode())
-        for item in data.get("items", []):
+        items = data.get("items", [])
+        for item in items:
             meta = item.get("metadata", {})
             uid = (meta.get("uid") or "")
             if uid.startswith(uid_12) or uid_12 in uid:
                 ns = meta.get("namespace", "default")
                 name = meta.get("name", "")
                 return f"{ns}/{name}"
-    except (OSError, urllib.error.URLError, urllib.error.HTTPError, ValueError, KeyError):
-        pass
+        _debug_log(f"no pod with UID prefix '{uid_12}' in API list (list has {len(items)} pods)")
+    except urllib.error.HTTPError as e:
+        _debug_log(f"API HTTP error: {e.code} {e.reason} — check RBAC (need list/get pods)")
+    except (OSError, urllib.error.URLError, ValueError, KeyError) as e:
+        _debug_log(f"API request failed: {e}")
     return None
 
 
@@ -112,17 +128,24 @@ class PodResolver:
     def _do_resolve(self, cgroup_id):
         fd = _bpf_cgroup_get_fd_by_id(cgroup_id)
         if fd < 0:
+            _debug_log(f"cgroup_id={cgroup_id}: bpf cgroup_get_fd_by_id failed (fd<0)")
             return f"cgroup_id={cgroup_id}"
         try:
             path = _cgroup_path_from_fd(fd)
-            if path:
-                uid = _pod_uid_from_cgroup_path(path)
-                if uid:
-                    ns_name = _k8s_resolve_uid_to_ns_name(uid)
-                    if ns_name:
-                        return ns_name
-                    return f"pod_uid:{uid}"
-            return f"cgroup_id={cgroup_id}"
+            if not path:
+                _debug_log(f"cgroup_id={cgroup_id}: could not read cgroup path from fd")
+                return f"cgroup_id={cgroup_id}"
+            if "kubepods" not in path:
+                _debug_log(f"cgroup_id={cgroup_id}: path has no 'kubepods' (not a pod?): {path[:120]}")
+                return f"cgroup_id={cgroup_id}"
+            uid = _pod_uid_from_cgroup_path(path)
+            if not uid:
+                _debug_log(f"cgroup_id={cgroup_id}: no pod UID in path (expected -pod<uid>.slice): {path[:120]}")
+                return f"cgroup_id={cgroup_id}"
+            ns_name = _k8s_resolve_uid_to_ns_name(uid)
+            if ns_name:
+                return ns_name
+            return f"pod_uid:{uid}"
         finally:
             try:
                 os.close(fd)

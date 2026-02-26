@@ -49,6 +49,10 @@ spec:
               value: {{ .Values.env.CGROUP_PATH | quote }}
             - name: METRICS_PORT
               value: {{ .Values.env.METRICS_PORT | quote }}
+            {{- if .Values.env.DEBUG_POD_RESOLVER }}
+            - name: DEBUG_POD_RESOLVER
+              value: {{ .Values.env.DEBUG_POD_RESOLVER | quote }}
+            {{- end }}
           volumeMounts:
             - name: host-cgroup
               mountPath: /host-cgroup

@@ -74,6 +74,8 @@ rbac:
 env:
   CGROUP_PATH: /host-cgroup
   METRICS_PORT: "9999"
+  # Set to "1" to log why cgroup_id -> pod name resolution fails (stderr); then check pod logs.
+  DEBUG_POD_RESOLVER: "1"
 
 labels:
   app.kubernetes.io/name: dns-tunnel-monitor
