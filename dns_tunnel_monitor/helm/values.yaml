@@ -2,7 +2,7 @@ global:
   namespace: default
 
 image:
-  repository: localhost/dns-tunnel-monitor
+  repository: localhost/cgroup-skb-test
   tag: v1
   pullPolicy: IfNotPresent
 

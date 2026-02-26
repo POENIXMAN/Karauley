@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV PYTHONPATH=/usr/lib/python3/dist-packages:/app
 
 WORKDIR /app
+COPY dns_tunnel_monitor/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
 COPY dns_tunnel_monitor ./dns_tunnel_monitor
 
 ENV CGROUP_PATH=/host-cgroup
