@@ -109,6 +109,30 @@ def _cgroup_path_from_fd(fd):
     return None
 
 
+def _comm_from_cgroup_path(path):
+    """
+    Read first PID from cgroup.procs and its comm from /proc/<pid>/comm.
+    With hostPID we see host processes; gives a representative process in that cgroup (often the main container process).
+    """
+    procs_file = os.path.join(path, "cgroup.procs")
+    try:
+        with open(procs_file, "r") as f:
+            first_line = f.readline()
+        if not first_line:
+            return "unknown"
+        pid = first_line.strip()
+        if not pid or not pid.isdigit():
+            return "unknown"
+        comm_path = f"/proc/{pid}/comm"
+        if os.path.isfile(comm_path):
+            with open(comm_path, "r") as f:
+                comm = f.read().strip()
+            return comm or "unknown"
+    except (OSError, FileNotFoundError):
+        pass
+    return "unknown"
+
+
 def _pod_uid_from_cgroup_path(path):
     if not path or "kubepods" not in path:
         return None
@@ -157,14 +181,25 @@ def _k8s_resolve_uid_to_ns_name(uid_12):
 
 
 class PodResolver:
-    """Resolve cgroup_id to ns/podname (priority) or fallback."""
+    """Resolve cgroup_id to ns/podname and (best-effort) process name."""
 
     def __init__(self):
+        # cgroup_id -> {"client_pod": str, "process": str}
         self._cache = {}
 
     def resolve(self, cgroup_id):
+        """Return client_pod string (ns/name or cgroup_id=...). Backward compatible."""
+        entry = self._resolve_entry(cgroup_id)
+        return entry["client_pod"]
+
+    def resolve_with_process(self, cgroup_id):
+        """Return (client_pod, process). Process is from cgroup.procs + /proc/pid/comm (best-effort)."""
+        entry = self._resolve_entry(cgroup_id)
+        return entry["client_pod"], entry["process"]
+
+    def _resolve_entry(self, cgroup_id):
         if cgroup_id == 0:
-            return "host"
+            return {"client_pod": "host", "process": "host"}
         if cgroup_id in self._cache:
             return self._cache[cgroup_id]
         out = self._do_resolve(cgroup_id)
@@ -184,22 +219,20 @@ class PodResolver:
                 except OSError:
                     pass
         if not path:
-            # Fallback: container cgroup namespace often blocks bpf_cgroup_get_fd_by_id.
-            # Walk host cgroup fs (CGROUP_PATH=/host-cgroup) and find dir with inode == cgroup_id.
             path = _find_cgroup_path_by_id(cgroup_id)
             if path and _DEBUG:
                 _debug_log(f"cgroup_id={cgroup_id}: resolved via cgroup fs walk (bpf fd failed)")
         if not path:
             _debug_log(f"cgroup_id={cgroup_id}: bpf cgroup_get_fd_by_id failed and no path found in CGROUP_PATH")
-            return f"cgroup_id={cgroup_id}"
+            return {"client_pod": f"cgroup_id={cgroup_id}", "process": "unknown"}
+        process = _comm_from_cgroup_path(path)
         if "kubepods" not in path:
             _debug_log(f"cgroup_id={cgroup_id}: path has no 'kubepods' (not a pod?): {path[:120]}")
-            return f"cgroup_id={cgroup_id}"
+            return {"client_pod": f"cgroup_id={cgroup_id}", "process": process}
         uid = _pod_uid_from_cgroup_path(path)
         if not uid:
             _debug_log(f"cgroup_id={cgroup_id}: no pod UID in path (expected -pod<uid>.slice): {path[:120]}")
-            return f"cgroup_id={cgroup_id}"
+            return {"client_pod": f"cgroup_id={cgroup_id}", "process": process}
         ns_name = _k8s_resolve_uid_to_ns_name(uid)
-        if ns_name:
-            return ns_name
-        return f"pod_uid:{uid}"
+        client_pod = ns_name if ns_name else f"pod_uid:{uid}"
+        return {"client_pod": client_pod, "process": process}

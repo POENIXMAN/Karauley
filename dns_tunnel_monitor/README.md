@@ -19,7 +19,7 @@ Plug-and-play детекция DNS-туннелей в Kubernetes. Исполь�
 3. **Event handler** (`event_handler.py`) — обрабатывает каждое событие: обновляет счётчики, метрики Prometheus, передаёт событие в **TunnelDetector**; при подозрении — логирует и инкрементирует `dns_suspicious_total`.
 4. **Detectors** (`detectors/`) — эвристики: C2 (подозрительные домены/паттерны), Exfil (высокая энтропия, длинные поддомены), IP-over-DNS (типы записей A/TXT и объём). Результат: флаг «подозрительно» и тип угрозы (C2, EXFIL, TUNNEL).
 5. **Metrics** (`metrics.py`) — HTTP на порту 9999: `/healthz`, `/ready`, `/metrics` (Prometheus). Метрики: запросы/ответы, подозрительные по типу угрозы, события по `client_pod`, число уникальных доменов.
-6. **PodResolver** (`pod_resolver.py`) — по `cgroup_id` получает fd cgroup, путь в fs, из пути извлекает UID пода (kubepods slice), при наличии доступа к API K8s — запрашивает namespace/name по UID. Иначе — fallback на `cgroup_id=...` или host.
+6. **PodResolver** (`pod_resolver.py`) — по `cgroup_id` получает путь cgroup (через bpf fd или обход cgroup fs), из пути извлекает UID пода (kubepods slice), при доступе к API K8s — запрашивает `namespace/name` по UID; для метки **process** читает первый PID из `cgroup.procs` и имя из `/proc/<pid>/comm`. Иначе — fallback на `cgroup_id=...` и `process=unknown`.
 
 ### Где перехватывается трафик
 
@@ -49,8 +49,8 @@ Plug-and-play детекция DNS-туннелей в Kubernetes. Исполь�
 ## Что умеем
 
 - Перехват DNS (UDP:53) по cgroup без TC/kprobe.
-- Определение источника по cgroup и при возможности — **client_pod** (`namespace/podname`) для алертов в Grafana.
-- Метрики Prometheus: запросы/ответы, подозрительные по типу (C2, EXFIL, TUNNEL), события по pod, число уникальных доменов.
+- Определение источника по cgroup и при возможности — **client_pod** (`namespace/podname`) и **process** (имя из `cgroup.procs` + `/proc/pid/comm`, см. ограничения ниже) для алертов в Grafana.
+- Метрики Prometheus: запросы/ответы, подозрительные по типу (C2, EXFIL, TUNNEL), события по pod и по process, число уникальных доменов.
 - Эвристическая детекция: C2-подобные паттерны, exfil (энтропия, длинные поддомены), IP-over-DNS (типы записей и объём).
 - Деплой одним Helm-чартом (DaemonSet на каждый узел, опционально аннотации под Prometheus).
 
@@ -59,14 +59,14 @@ Plug-and-play детекция DNS-туннелей в Kubernetes. Исполь�
 ## Что не умеем (ограничения и пол для будущей работы)
 
 - **Только UDP, только IPv4** — TCP DNS (например зоны) и IPv6 не обрабатываются в BPF.
-- **Нет привязки к процессу (pid/comm)** — только cgroup; для «какой процесс в поде» нужны дополнительные механизмы (например eBPF по pid или парсинг /proc в поде).
-- **Разрешение pod зависит от cgroup и K8s** — если cgroup не в формате kubepods или нет доступа к API (токен, RBAC), остаётся только `cgroup_id=...` или host.
+- **Process — только приблизительно** — BPF по cgroup_skb отдаёт только `cgroup_id`, без pid. Имя процесса берётся в userspace: первый PID из `cgroup.procs` и `/proc/<pid>/comm`. Это **не** «процесс, отправивший этот пакет», а один из процессов в cgroup (часто основной процесс контейнера). Для пода с одним процессом обычно совпадает; при нескольких процессах в поде может быть любой из них. Точное соответствие «пакет → процесс» потребовало бы pid в BPF (в cgroup_skb контексте это не всегда доступно).
+- **Разрешение pod зависит от cgroup и K8s** — если cgroup не в формате kubepods или нет доступа к API (токен, RBAC), остаётся только `cgroup_id=...` или host. В контейнере часто недоступен `bpf_cgroup_get_fd_by_id` (cgroup namespace); используется обход по cgroup fs (CGROUP_PATH).
 - **Детекторы — эвристики** — возможны ложные срабатывания и пропуски; нет ML, нет интеграции с threat intelligence; список «подозрительных» паттернов можно расширять.
 - **Только первые 64 байта payload** — длинные ответы/запросы обрезаются; для глубокого анализа нужен больший сэмпл или буферизация (с ограничениями BPF).
 - **Один cgroup на инстанс** — привязка к одному пути cgroup; для нескольких cgroup нужны несколько инстансов или доработка логики attach.
 - **BCC и зависимости ядра** — требуется BCC (и совместимое ядро); для старых ядер или ограниченных окружений может понадобиться порт на libbpf/CO-RE.
 
-Эти пункты задают нижнюю границу возможностей и направления для развития (TCP DNS, IPv6, pid/comm, более богатые детекторы, полный payload, несколько cgroup, libbpf).
+Эти пункты задают нижнюю границу возможностей и направления для развития (TCP DNS, IPv6, точный pid в BPF, более богатые детекторы, полный payload, несколько cgroup, libbpf).
 
 ---
 
@@ -109,9 +109,10 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 - `dns_queries_total{protocol}`, `dns_responses_total{protocol}`
 - `dns_suspicious_total{threat_type}` — C2, EXFIL, TUNNEL
 - `dns_events_by_pod{client_pod, direction}` — **client_pod** = ns/podname или cgroup_id=...
+- `dns_events_by_process{process, client_pod, direction}` — **process** = имя из cgroup (best-effort: один из процессов в cgroup, не обязательно отправитель пакета), **client_pod** = ns/podname или cgroup_id=...
 - `dns_domains_unique`
 
-В Grafana по `client_pod` можно смотреть, какой pod генерирует DNS и алерты по туннелям.
+В Grafana по `client_pod` и `process` можно смотреть, какой pod и какой процесс генерируют DNS и алерты по туннелям. Учитывайте ограничение: **process** — это представительный процесс в cgroup (часто основной контейнер), а не гарантированно отправитель данного пакета (см. раздел «Что не умеем»).
 
 ### Как показывать namespace/pod вместо cgroup_id
 

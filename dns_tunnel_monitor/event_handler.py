@@ -58,8 +58,9 @@ def handle_event(event):
             metrics.dns_domains_unique.set(len(stats["domains"]))
 
     direction_label = "query" if not is_response else "response"
+    process = event.get("process", "unknown")
     if metrics.FLASK_AVAILABLE:
-        metrics.dns_events_by_process.labels(process="unknown", client_pod=client_pod, direction=direction_label).inc()
+        metrics.dns_events_by_process.labels(process=process, client_pod=client_pod, direction=direction_label).inc()
         metrics.dns_events_by_pod.labels(client_pod=client_pod, direction=direction_label).inc()
 
     event_data = {
@@ -76,9 +77,8 @@ def handle_event(event):
             metrics.dns_suspicious_total.labels(threat_type=threat_type or "UNKNOWN").inc()
 
     color = RED if is_suspicious else (BLUE if is_response else GREEN)
-    pod_display = f" [{CYAN}{client_pod}{RESET}]"
     dir_label = "RESPONSE" if is_response else "QUERY"
-    print(f"{color}{protocol:3} {dir_label:8}{RESET} | ID:{dns_id:04x} | {client_pod} | {dns_type_name:>5} | {domain}")
+    print(f"{color}{protocol:3} {dir_label:8}{RESET} | ID:{dns_id:04x} | {process} @ {client_pod} | {dns_type_name:>5} | {domain}")
 
     if is_suspicious:
         print(f"         {RED}SUSPICIOUS [{threat_type}]: {', '.join(threat_reasons)}{RESET}")

@@ -62,12 +62,13 @@ def load_bpf(cgroup_path, event_callback):
         payload_bytes = bytes(ev.payload)
         domain, dns_id, dns_flags, dns_answers, dns_type = _parse_payload(payload_bytes)
         direction = "query" if ev.direction == 1 else "response"
-        client_pod = resolver.resolve(ev.cgroup_id)
+        client_pod, process = resolver.resolve_with_process(ev.cgroup_id)
         normalized = {
             "domain": domain,
             "direction": direction,
             "protocol": "UDP",
             "client_pod": client_pod,
+            "process": process,
             "cgroup_id": ev.cgroup_id,
             "dns_id": dns_id,
             "dns_flags": dns_flags,
