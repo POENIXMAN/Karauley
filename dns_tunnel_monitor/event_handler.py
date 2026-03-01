@@ -65,9 +65,11 @@ def handle_event(event):
 
     event_data = {
         "domain": domain,
+        "direction": direction,
         "dns_type": dns_type,
         "dns_answers": dns_answers,
         "cgroup_id": event.get("cgroup_id", 0),
+        "timestamp_ns": event.get("timestamp_ns", 0),
     }
     is_suspicious, threat_type, threat_reasons = tunnel_detector.analyze(event_data)
 

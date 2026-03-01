@@ -16,7 +16,9 @@ class C2Detector:
 
         key = (event.get('cgroup_id', 0), base_domain)
         timestamp = event.get('timestamp_ns', 0)
-        self.query_history[key].append(timestamp)
+        # Beacon regularity: only use query timestamps (responses would skew intervals)
+        if event.get('direction') == 'query' and timestamp:
+            self.query_history[key].append(timestamp)
         if len(self.query_history[key]) > self.MAX_HISTORY:
             self.query_history[key] = self.query_history[key][-self.MAX_HISTORY:]
 

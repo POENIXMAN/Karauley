@@ -2,6 +2,7 @@
 import os
 import sys
 import ctypes
+import time
 
 from bcc import BPF
 from bcc import BPFAttachType
@@ -74,6 +75,7 @@ def load_bpf(cgroup_path, event_callback):
             "dns_flags": dns_flags,
             "dns_answers": dns_answers,
             "dns_type": dns_type,
+            "timestamp_ns": time.time_ns(),
         }
         try:
             event_callback(normalized)
