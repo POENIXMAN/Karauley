@@ -4,6 +4,20 @@
 
 ---
 
+## 0. Статус по приоритетам (ANALYSIS.md)
+
+| Приоритет | Задача | Статус |
+|-----------|--------|--------|
+| Высокий | Добавить `timestamp_ns` в событие (loader) и в `event_data` (event_handler) | **Готово** |
+| Высокий | Передавать в детекторы timestamp_ns + direction | **Готово** (в event_data передаются timestamp_ns, direction, domain, dns_type, dns_answers, cgroup_id) |
+| Средний | Конфигурируемые пороги детекторов (config/env) | В плане (Фаза 1) |
+| Средний | Ограничение роста памяти в детекторах (TTL/LRU) | В плане (Фаза 1: BUG-11, 16, 26) |
+| Средний | Смягчить C2_TXT (whitelist/комбинация с другими признаками) | В плане (ISSUE-12, Фаза 1) |
+| Низкий | Юнит-тесты для парсинга и детекторов | **Частично готово** (tests/test_timestamp_detection.py — C2 beacon, IP-over-DNS rate/NULL); парсинг и exfil — в Фазе 2 |
+| Низкий | Опционально: timestamp в BPF (bpf_ktime_get_ns) | Не в приоритете |
+
+---
+
 ## 1. Готовность проекта
 
 ### Общая оценка: **~55%**
@@ -12,14 +26,14 @@
 |-----------|:----------:|-------------|
 | BPF-программа (cgroup_skb, захват UDP/53) | 80% | Работает, но payload 64 байта — мало; direction по egress/ingress, не по QR-биту |
 | Парсинг DNS (domain, type, flags) | 75% | Работает для коротких доменов; нет bounds check в parse_dns_type |
-| Детектор C2 (beacon + TXT) | 50% | Beacon логика работает после добавления timestamp_ns; TXT whitelist слишком узкий |
+| Детектор C2 (beacon + TXT) | 55% | **Готово:** timestamp_ns в loader + event_data; beacon только по query. TXT whitelist слишком узкий |
 | Детектор Exfil (entropy, length, encoding, subdomains) | 35% | LONG_DOMAIN мёртв (BPF limit); HEX_SUBDOMAIN мёртв (regex order); энтропия по полному домену; subdomain_counts утекает |
-| Детектор IP-over-DNS (rate, NULL, answers) | 40% | Rate занижается (BUG-19); tumbling window сбрасывает все ключи (BUG-18) |
+| Детектор IP-over-DNS (rate, NULL, answers) | 50% | **Готово:** timestamp_ns передаётся — окно и rate считаются. Rate занижается (BUG-19); tumbling window (BUG-18) — в плане |
 | Pod resolution (cgroup_id → ns/pod) | 70% | Работает, но кэш не инвалидируется; K8s API limit=500 |
 | Prometheus метрики + Grafana | 75% | Работают, но label cardinality explosion при масштабе |
 | Helm chart + DaemonSet деплой | 90% | Полный набор: DaemonSet, RBAC, ServiceMonitor, probes |
 | Dockerfile | 90% | Рабочий, python:3.11-slim + bpfcc-tools |
-| Тестирование (unit, integration) | 0% | Тестов нет |
+| Тестирование (unit, integration) | 20% | **Готово:** tests/test_timestamp_detection.py (C2 beacon, IP-over-DNS rate/NULL, timestamp=0). Остальное — Фаза 2 |
 | Валидация на реальном трафике (TP/FP) | 0% | Не проводилась |
 | Сравнение с другими инструментами | 0% | Не проводилось |
 | Документация (README, алгоритмы) | 70% | Хорошая, но не отражает текущие баги |
@@ -330,6 +344,7 @@ mlScorer:
 | Memory fixes (BUG-11, 16, 26): TTL/LRU | c2.py, exfil.py, pod_resolver.py | 2-3ч |
 | ISSUE-22: Базовый scoring (weighted sum) | detectors/tunnel.py | 1-2ч |
 | Обновить документацию (DETECTION_ALGORITHMS.md) | docs/ | 1ч |
+| (Опционально) Передавать полный `event` в `tunnel_detector.analyze()` вместо урезанного `event_data` — единый контракт для детекторов | event_handler.py | 30мин |
 
 ### Фаза 2: Тестирование (5-8 часов)
 
