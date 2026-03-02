@@ -62,7 +62,8 @@ def load_bpf(cgroup_path, event_callback):
         ev = ctypes.cast(data, ctypes.POINTER(CgroupDNSEvent)).contents
         payload_bytes = bytes(ev.payload)
         domain, dns_id, dns_flags, dns_answers, dns_type = _parse_payload(payload_bytes)
-        direction = "query" if ev.direction == 1 else "response"
+        is_response = (dns_flags & 0x8000) != 0
+        direction = "response" if is_response else "query"
         client_pod, process = resolver.resolve_with_process(ev.cgroup_id)
         normalized = {
             "domain": domain,

@@ -1,6 +1,77 @@
 # План работ — DNS Tunnel Monitor (ВКР)
 
-Дата: 2026-03-01
+Дата: 2026-03-01 (актуализация: 2026-03-02)
+
+---
+
+## Прогресс исправлений (актуализация 2026-03-02)
+
+### Общий прогресс по плану: **~75%** (критические баги и FP исправлены; валидация TP/FP — следующий этап)
+
+### Что исправлено
+
+| # | ID | Описание | Файл |
+|---|-----|----------|------|
+| 1 | BUG-14 | HEX_SUBDOMAIN мёртвый код (порядок regex) | detectors/exfil.py |
+| 2 | BUG-19 | Rate от первого события ключа в окне | detectors/ip_over_dns.py |
+| 3 | BUG-18 | Per-key окна вместо глобального tumbling | detectors/ip_over_dns.py |
+| 4 | BUG-03 | query/response по QR-биту DNS, не egress/ingress | loader.py |
+| 5 | ISSUE-12 | Расширен TXT whitelist + _acme-challenge | detectors/c2.py |
+| 6 | K8S | Whitelist cluster DNS (.svc.cluster.local и др.) | config.py, detectors/tunnel.py |
+| 7 | ISSUE-22 | Scoring вместо бинарного OR (порог 2 балла) | detectors/tunnel.py |
+| 8 | BUG-16 | Ограничение subdomain_counts (max 50 на base_domain) | detectors/exfil.py |
+| 9 | BUG-11 | Ограничение ключей query_history (LRU, 10K) | detectors/c2.py |
+| 10 | BUG-26 | TTL-кэш PodResolver (5 мин, env POD_RESOLVER_CACHE_TTL) | config.py, pod_resolver.py |
+| 11 | NEW-01 | LRU для ip_over_dns (_key_data OrderedDict, 10K keys) | detectors/ip_over_dns.py |
+
+### Что дальше (в порядке приоритета)
+
+| Приоритет | Задача | Статус |
+|-----------|--------|--------|
+| **1** | **Валидация TP/FP** — тестовый стенд, iodine/dnscat2, расчёт Precision/Recall/F1 | **Следующий шаг** |
+| 2 | Конфигурируемые пороги детекторов (config/env) | В плане |
+| 3 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
+| 4 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |
+| 5 | Юнит-тесты для exfil, парсинга; расширение test_timestamp_detection | В плане |
+| 6 | Сравнение с Tetragon/Falco/Zeek (overhead, coverage) | Для ВКР |
+
+### Тестирование TP/FP (раздел 3 плана)
+
+| Этап | Статус |
+|------|--------|
+| Деплой кластера + монитор | Не проведён |
+| Baseline легитимного трафика | Не проведён |
+| Запуск tunnel tools (iodine, dnscat2, DNSExfiltrator) | Не проведён |
+| Сбор confusion matrix, расчёт метрик | Не проведён |
+
+**Рекомендация:** критические фиксы (включая NEW-01) завершены. Следующий шаг — развернуть тестовый стенд (раздел 3.2), прогнать сценарии из 3.5 и заполнить таблицу метрик (3.1, формат для ВКР).
+
+---
+
+## Решение: payload 64 байта (текущее ограничение)
+
+Увеличение PAYLOAD_SAMPLE (196/256) на части окружений даёт **нулевой payload** из skb (cgroup_skb, Linux host). Для стабильной работы принято ограничение **64 байта**.
+
+### Что теряем / что остаётся
+
+| Компонент / эвристика | Статус | Комментарий |
+|------------------------|:------:|-------------|
+| Парсинг домена (короткий/средний) | **+** | Работает до ~45 символов |
+| C2 beacon (интервалы, домен) | **+** | Работает |
+| C2 TXT | **+** | Работает (нужен whitelist) |
+| IP-over-DNS: rate, NULL, MANY_ANSWERS | **+** | Не зависят от длины домена |
+| Exfil: HIGH_ENTROPY, DIGIT_RATIO, BASE64_SUBDOMAIN, MANY_SUBDOMAINS | **+** | Работают по усечённому домену |
+| **HEX_SUBDOMAIN** | **+** | Исправлен порядок regex (BUG-14) |
+| **LONG_DOMAIN** (len > 60) | **−** | **Не работает** (домен макс. ~45 символов) |
+| Энтропия для длинных exfil-доменов | **−** | Занижена (считается по обрезанному домену) |
+
+### Влияние на детекторы (при 64 байтах)
+
+| Детектор | Готовность | Что работает | Что не работает / ослаблено |
+|----------|:----------:|--------------|----------------------------|
+| C2 | ~80% | Beacon, TXT, direction по QR, расширенный whitelist, LRU query_history | — |
+| Exfil | ~65% | Энтропия, digit ratio, base64, **HEX_SUBDOMAIN**, many subdomains (capped) | **LONG_DOMAIN** (64 байт) |
+| IP-over-DNS | ~80% | NULL, MANY_ANSWERS, rate (per-key window, first_seen) | — |
 
 ---
 
@@ -9,81 +80,85 @@
 | Приоритет | Задача | Статус |
 |-----------|--------|--------|
 | Высокий | Добавить `timestamp_ns` в событие (loader) и в `event_data` (event_handler) | **Готово** |
-| Высокий | Передавать в детекторы timestamp_ns + direction | **Готово** (в event_data передаются timestamp_ns, direction, domain, dns_type, dns_answers, cgroup_id) |
-| Средний | Конфигурируемые пороги детекторов (config/env) | В плане (Фаза 1) |
-| Средний | Ограничение роста памяти в детекторах (TTL/LRU) | В плане (Фаза 1: BUG-11, 16, 26) |
-| Средний | Смягчить C2_TXT (whitelist/комбинация с другими признаками) | В плане (ISSUE-12, Фаза 1) |
-| Низкий | Юнит-тесты для парсинга и детекторов | **Частично готово** (tests/test_timestamp_detection.py — C2 beacon, IP-over-DNS rate/NULL); парсинг и exfil — в Фазе 2 |
+| Высокий | Передавать в детекторы timestamp_ns + direction | **Готово** |
+| Высокий | direction по QR-биту (BUG-03) | **Готово** |
+| Средний | Ограничение роста памяти в детекторах (TTL/LRU) | **Готово** (BUG-11, 16, 26) |
+| Средний | Смягчить C2_TXT (whitelist + scoring) | **Готово** (ISSUE-12, ISSUE-22, K8S whitelist) |
+| Средний | Конфигурируемые пороги детекторов (config/env) | В плане |
+| **Следующий** | **Валидация TP/FP** (раздел 3) | Не проведена |
+| Низкий | Юнит-тесты для парсинга и детекторов | Частично (test_timestamp_detection.py); exfil/парсинг — в плане |
 | Низкий | Опционально: timestamp в BPF (bpf_ktime_get_ns) | Не в приоритете |
 
 ---
 
 ## 1. Готовность проекта
 
-### Общая оценка: **~55%**
+### Общая оценка: **~75%** (критические баги и FP исправлены; валидация TP/FP — следующий этап)
 
-| Компонент | Готовность | Комментарий |
-|-----------|:----------:|-------------|
-| BPF-программа (cgroup_skb, захват UDP/53) | 80% | Работает, но payload 64 байта — мало; direction по egress/ingress, не по QR-биту |
-| Парсинг DNS (domain, type, flags) | 75% | Работает для коротких доменов; нет bounds check в parse_dns_type |
-| Детектор C2 (beacon + TXT) | 55% | **Готово:** timestamp_ns в loader + event_data; beacon только по query. TXT whitelist слишком узкий |
-| Детектор Exfil (entropy, length, encoding, subdomains) | 35% | LONG_DOMAIN мёртв (BPF limit); HEX_SUBDOMAIN мёртв (regex order); энтропия по полному домену; subdomain_counts утекает |
-| Детектор IP-over-DNS (rate, NULL, answers) | 50% | **Готово:** timestamp_ns передаётся — окно и rate считаются. Rate занижается (BUG-19); tumbling window (BUG-18) — в плане |
-| Pod resolution (cgroup_id → ns/pod) | 70% | Работает, но кэш не инвалидируется; K8s API limit=500 |
-| Prometheus метрики + Grafana | 75% | Работают, но label cardinality explosion при масштабе |
-| Helm chart + DaemonSet деплой | 90% | Полный набор: DaemonSet, RBAC, ServiceMonitor, probes |
-| Dockerfile | 90% | Рабочий, python:3.11-slim + bpfcc-tools |
-| Тестирование (unit, integration) | 20% | **Готово:** tests/test_timestamp_detection.py (C2 beacon, IP-over-DNS rate/NULL, timestamp=0). Остальное — Фаза 2 |
-| Валидация на реальном трафике (TP/FP) | 0% | Не проводилась |
-| Сравнение с другими инструментами | 0% | Не проводилось |
-| Документация (README, алгоритмы) | 70% | Хорошая, но не отражает текущие баги |
+| Компонент | Готовность | +/− | Комментарий |
+|-----------|:----------:|:---:|-------------|
+| BPF (cgroup_skb, UDP/53) | 80% | **+** | Работает; payload 64 байта; direction по QR в loader |
+| Парсинг DNS (domain, type, flags) | 70% | **+** | Работает до ~45 символов; bounds check в parse_dns_type — в плане |
+| Детектор C2 (beacon + TXT) | 80% | **+** | Beacon, TXT, расширенный whitelist, LRU query_history |
+| Детектор Exfil | 65% | **+** | HEX_SUBDOMAIN исправлен; subdomain_counts с лимитом; LONG_DOMAIN недостижим (64 байт) |
+| Детектор IP-over-DNS | 80% | **+** | Per-key окна, rate от first_seen, NULL, MANY_ANSWERS |
+| Агрегатор (tunnel.py) | 85% | **+** | Scoring, cluster DNS whitelist |
+| Pod resolution | 80% | **+** | TTL-кэш (5 мин); K8s limit=500 — в плане |
+| Prometheus + Grafana | 75% | **+** | Работают; cardinality (BUG-30) — в плане |
+| Helm + DaemonSet + Dockerfile | 90% | **+** | Полный набор |
+| Тестирование (юнит) | 25% | **+** | test_timestamp_detection.py; exfil/парсинг — в плане |
+| **Валидация TP/FP** | **0%** | **−** | **Следующий шаг** — раздел 3 |
+| Сравнение с инструментами | 0% | − | Для ВКР |
+| Документация | 75% | **+** | README, аудит, план с прогрессом |
 
 ### Что работает сквозь (end-to-end):
 
 ```
-BPF cgroup_skb → perf buffer → Python парсинг → 3 детектора → Prometheus → Grafana
-       ✓              ✓              ✓             частично         ✓          ✓
+BPF cgroup_skb (64B) → perf buffer → Python парсинг → 3 детектора (scoring) → Prometheus → Grafana
+       +                    +              +                    +                        +          +
 ```
 
-Сквозной pipeline работает. Основная проблема — **качество детекции**: часть эвристик мертва, часть занижает/завышает.
+Критические баги и основные FP устранены. Готовность к валидации на стенде (iodine, dnscat2, расчёт TP/FP).
 
 ---
 
 ## 2. Критические баги: исправить ДО всего остального
 
-Эти баги напрямую влияют на корректность детекции. Без их исправления любое тестирование TP/FP бессмысленно.
+С учётом **ограничения 64 байт payload** (BUG-02/17 не исправляем, см. начало документа).
 
 ### Приоритет 1: Блокеры валидации
 
-| # | Баг | Суть | Влияние | Оценка трудозатрат |
-|---|-----|------|---------|--------------------|
-| **BUG-02** | PAYLOAD_SAMPLE = 64 | Домен обрезается до ~45 символов | LONG_DOMAIN мёртв, энтропия занижена | 1ч — изменить BPF struct + event_struct.py |
-| **BUG-14** | Regex order: base64 перед hex | HEX_SUBDOMAIN никогда не сработает | Целая ветка детекции мертва | 10мин — поменять if/elif |
-| **BUG-19** | Rate = count / window_elapsed | Занижение rate в N раз | IP-over-DNS пропускает всплески | 30мин — per-key first_seen |
-| **BUG-18** | Tumbling window: global clear | Сброс всех ключей при смене окна | Потеря данных для ключей, начавших mid-window | 30мин — per-key windows или sliding |
-| **BUG-03** | direction по egress/ingress | query/response инвертированы для DNS-серверов | C2 beacon считает интервалы по ответам | 15мин — использовать QR-бит из dns_flags |
+| # | Баг | Суть | Статус |
+|---|-----|------|--------|
+| ~~BUG-02~~ | PAYLOAD = 64 | Домен ~45 символов, LONG_DOMAIN недостижим | **Принято:** не меняем |
+| **BUG-14** | Regex order: base64 перед hex | HEX_SUBDOMAIN никогда не сработает | **Готово** (exfil.py) |
+| **BUG-19** | Rate = count / window_elapsed | Занижение rate в N раз | **Готово** (ip_over_dns.py, first_seen_ns) |
+| **BUG-18** | Tumbling window: global clear | Сброс всех ключей при смене окна | **Готово** (ip_over_dns.py, per-key window) |
+| **BUG-03** | direction по egress/ingress | query/response инвертированы | **Готово** (loader.py, QR-бит) |
 
 ### Приоритет 2: False Positives
 
-| # | Баг | Суть | Влияние | Оценка |
-|---|-----|------|---------|----|
-| **ISSUE-12** | TXT whitelist = 3 домена | SPF/DKIM/ACME/cert-manager → FP | Шквал алертов в кластере | 30мин — расширить или убрать |
-| **ISSUE-22** | Бинарный OR | 1 причина = suspicious | Любой TXT = алерт | 1-2ч — ввести scoring |
-| **K8S** | Нет whitelist cluster DNS | `.svc.cluster.local` → FP | Core feature для ВКР | 30мин — whitelist в конфиг |
+| # | Баг | Суть | Статус |
+|---|-----|------|--------|
+| **ISSUE-12** | TXT whitelist = 3 домена | SPF/DKIM/ACME → FP | **Готово** (c2.py, расширенный whitelist + _acme-challenge) |
+| **ISSUE-22** | Бинарный OR | 1 причина = suspicious | **Готово** (tunnel.py, scoring, порог 2) |
+| **K8S** | Нет whitelist cluster DNS | `.svc.cluster.local` → FP | **Готово** (config.py, tunnel.py) |
 
 ### Приоритет 3: Стабильность (OOM)
 
-| # | Баг | Суть | Оценка |
+| # | Баг | Суть | Статус |
 |---|-----|------|--------|
-| **BUG-11** | query_history keys ∞ | 1-2ч — LRU или TTL dict |
-| **BUG-16** | subdomain_counts ∞ | 30мин — TTL или max size |
-| **BUG-26** | PodResolver cache stale | 1ч — TTL-кэш |
+| **BUG-11** | query_history keys ∞ | O(pods × domains) ключей | **Готово** (c2.py, OrderedDict LRU, 10K ключей) |
+| **BUG-16** | subdomain_counts ∞ | Рост + alert fatigue | **Готово** (exfil.py, list max 50 на base_domain) |
+| **BUG-26** | PodResolver cache stale | Stale + утечка | **Готово** (pod_resolver.py, TTL 5 мин) |
 
-**Суммарно на все критические фиксы: ~8-10 часов работы.**
+**Критические фиксы из плана выполнены. Дальше: валидация TP/FP (раздел 3).**
 
 ---
 
 ## 3. Валидация: метрики и методология тестирования TP/FP
+
+**Статус:** не проведена. Критические фиксы (включая NEW-01) завершены. **Следующий шаг** — развернуть стенд (3.2), выполнить процедуру (3.5), заполнить таблицу метрик (ниже).
 
 ### 3.1 Метрики качества детекции
 
@@ -330,21 +405,21 @@ mlScorer:
 
 ## 6. Полный план работ (roadmap)
 
-### Фаза 1: Исправление критических багов (8-10 часов)
+### Фаза 1: Исправление критических багов (~6–8 ч, без BUG-02)
 
 | Задача | Файлы | Оценка |
 |--------|-------|--------|
-| BUG-02: Увеличить PAYLOAD_SAMPLE до 196 | bpf/dns_cgroup.bpf.c, event_struct.py | 1ч |
-| BUG-14: Поменять порядок hex/base64 | detectors/exfil.py | 10мин |
-| BUG-19: Per-key first_seen для rate | detectors/ip_over_dns.py | 30мин |
-| BUG-18: Per-key sliding window | detectors/ip_over_dns.py | 30мин |
-| BUG-03: QR-бит вместо egress/ingress | loader.py | 15мин |
-| ISSUE-12 + K8S: Whitelist cluster DNS + расширить TXT | detectors/c2.py, config.py | 30мин |
-| BUG-15: Энтропия только по поддомену | detectors/exfil.py | 20мин |
-| Memory fixes (BUG-11, 16, 26): TTL/LRU | c2.py, exfil.py, pod_resolver.py | 2-3ч |
-| ISSUE-22: Базовый scoring (weighted sum) | detectors/tunnel.py | 1-2ч |
-| Обновить документацию (DETECTION_ALGORITHMS.md) | docs/ | 1ч |
-| (Опционально) Передавать полный `event` в `tunnel_detector.analyze()` вместо урезанного `event_data` — единый контракт для детекторов | event_handler.py | 30мин |
+| ~~BUG-02: PAYLOAD 196~~ | — | **Пропуск:** оставляем 64 байта (см. решение в начале документа) |
+| BUG-14: Поменять порядок hex/base64 | detectors/exfil.py | 10 мин |
+| BUG-19: Per-key first_seen для rate | detectors/ip_over_dns.py | 30 мин |
+| BUG-18: Per-key sliding window | detectors/ip_over_dns.py | 30 мин |
+| BUG-03: QR-бит вместо egress/ingress | loader.py | 15 мин |
+| ISSUE-12 + K8S: Whitelist cluster DNS + расширить TXT | detectors/c2.py, config.py | 30 мин |
+| BUG-15: Энтропия только по поддомену | detectors/exfil.py | 20 мин |
+| Memory fixes (BUG-11, 16, 26): TTL/LRU | c2.py, exfil.py, pod_resolver.py | 2–3 ч |
+| ISSUE-22: Базовый scoring (weighted sum) | detectors/tunnel.py | 1–2 ч |
+| Обновить документацию (DETECTION_ALGORITHMS.md, ограничение 64 байт) | docs/ | 1 ч |
+| (Опционально) Полный `event` в `tunnel_detector.analyze()` | event_handler.py | 30 мин |
 
 ### Фаза 2: Тестирование (5-8 часов)
 
@@ -391,7 +466,7 @@ mlScorer:
 
 | Фаза | Часы | Необходимость |
 |-------|:----:|:-------------:|
-| 1. Critical fixes | 8-10 | Обязательно |
+| 1. Critical fixes (без BUG-02) | 6–8 | Обязательно |
 | 2. Тесты | 5-8 | Обязательно |
 | 3. Валидация TP/FP | 8-12 | Обязательно |
 | 4. Сравнение | 4-6 | Очень желательно |
@@ -404,9 +479,9 @@ mlScorer:
 
 ### Обязательно для защиты
 
-1. **Таблицы TP/FP/Precision/Recall** по каждому детектору на реальных tunnel tools — это основа «экспериментальной части»
-2. **Сравнение overhead** (CPU/mem) с Tetragon/Falco — доказательство что ваш подход легче
-3. **Раздел «ограничения»** — честно описать UDP-only, payload truncation, эвристические пороги
+1. **Таблицы TP/FP/Precision/Recall** по каждому детектору на реальных tunnel tools — основа «экспериментальной части»
+2. **Сравнение overhead** (CPU/mem) с Tetragon/Falco — доказательство что подход легче
+3. **Раздел «ограничения»** — честно описать: **payload 64 байта** (домен ~45 символов, LONG_DOMAIN не работает), UDP-only, эвристические пороги
 4. **Архитектурная диаграмма** — BPF → userspace → detectors → metrics → Grafana с атрибуцией cgroup → pod
 
 ### Сильно усилит

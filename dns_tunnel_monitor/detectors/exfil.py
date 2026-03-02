@@ -6,8 +6,11 @@ from dns_tunnel_monitor.dns_parsing import calculate_entropy
 
 
 class ExfiltrationDetector:
+    # BUG-16: ограничение роста — храним не более MAX_SUBDOMAINS_STORED поддоменов на base_domain
+    MAX_SUBDOMAINS_STORED = 50
+
     def __init__(self):
-        self.subdomain_counts = defaultdict(set)
+        self.subdomain_counts = defaultdict(list)  # list для ограничения размера (evict oldest)
         self.ENTROPY_THRESHOLD = 4.0
         self.LENGTH_THRESHOLD = 60
         self.DIGIT_RATIO_THRESHOLD = 0.3
@@ -34,16 +37,21 @@ class ExfiltrationDetector:
         if len(parts) > 2:
             first_subdomain = parts[0]
             if len(first_subdomain) > 20:
-                if re.match(r'^[A-Za-z0-9+/=]+$', first_subdomain):
-                    reasons.append("BASE64_SUBDOMAIN")
-                elif re.match(r'^[0-9a-fA-F]+$', first_subdomain):
+                # Проверяем hex первым: hex-символы — подмножество base64, иначе HEX_SUBDOMAIN никогда не сработает (BUG-14)
+                if re.match(r'^[0-9a-fA-F]+$', first_subdomain):
                     reasons.append("HEX_SUBDOMAIN")
+                elif re.match(r'^[A-Za-z0-9+/=]+$', first_subdomain):
+                    reasons.append("BASE64_SUBDOMAIN")
 
         if len(parts) >= 2:
             base_domain = '.'.join(parts[-2:])
             subdomain = '.'.join(parts[:-2])
-            self.subdomain_counts[base_domain].add(subdomain)
-            if len(self.subdomain_counts[base_domain]) > self.SUBDOMAIN_COUNT_THRESHOLD:
-                reasons.append(f"MANY_SUBDOMAINS({len(self.subdomain_counts[base_domain])})")
+            lst = self.subdomain_counts[base_domain]
+            if subdomain not in lst:
+                lst.append(subdomain)
+                if len(lst) > self.MAX_SUBDOMAINS_STORED:
+                    lst.pop(0)
+            if len(lst) > self.SUBDOMAIN_COUNT_THRESHOLD:
+                reasons.append(f"MANY_SUBDOMAINS({len(lst)})")
 
         return len(reasons) > 0, reasons

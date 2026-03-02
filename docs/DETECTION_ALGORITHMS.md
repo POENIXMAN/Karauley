@@ -1,18 +1,28 @@
-# Алгоритмы детекции DNS-туннелей
+# Алгоритмы детекции DNS-туннелей (v2)
 
-В мониторе используются три типа детекторов, соответствующие типичным техникам туннелирования через DNS: **C2 (Command & Control)**, **экфильтрация данных (Exfil)** и **IP-over-DNS**. Ниже описаны целевые техники и точные алгоритмы, реализованные в коде.
+Обновлено: 2026-03-01. Соответствует текущему коду после исправлений.
+
+В мониторе используются три детектора: **C2 (Command & Control)**, **экфильтрация данных (Exfil)** и **IP-over-DNS**. Итоговое решение принимается **scoring-агрегатором** (взвешенная сумма, порог 2 балла).
+
+**Ограничение:** BPF захватывает 64 байта DNS payload → максимум ~45 символов доменного имени. Проверка LONG_DOMAIN (> 60 символов) фактически не срабатывает. Все остальные 10 проверок работают.
 
 ---
 
-## 1. Три целевые техники
+## 1. Предварительная фильтрация
 
-| Техника | Цель атакующего | Что смотрим мы |
-|--------|------------------|----------------|
-| **C2 / Beacon** | Периодический опрос сервера управления (heartbeat, check-in) | Регулярность запросов по времени; запросы TXT к нестандартным доменам |
-| **Exfiltration** | Вынос данных в поддоменах или в теле запроса/ответа | Энтропия и длина домена, кодирование (Base64/hex), множество поддоменов |
-| **IP-over-DNS** | Доставка IP-трафика поверх DNS (например, iodine) | Тип NULL, высокая частота запросов, много записей в ответе |
+### Cluster-internal DNS whitelist
 
-Каждый детектор по событию DNS возвращает «подозрительно / не подозрительно» и список причин (reasons). Итоговое решение по событию — объединение всех детекторов (любое срабатывание даёт подозрение).
+Перед вызовом детекторов агрегатор проверяет, не является ли домен cluster-internal:
+
+```python
+if domain.endswith(suffix) for suffix in CLUSTER_DNS_SUFFIXES:
+    return not suspicious  # пропускаем
+```
+
+По умолчанию: `.svc.cluster.local`, `.cluster.local`, `.pod.cluster.local`.  
+Configurable через env `CLUSTER_DNS_SUFFIXES`.
+
+Это убирает ложные срабатывания на Kubernetes service discovery, headless services, ndots:5 и т.д.
 
 ---
 
@@ -20,48 +30,44 @@
 
 **Файл:** `detectors/c2.py`
 
-### 2.1 Идея
+### 2.1 Алгоритм 1: Beacon (регулярность интервалов)
 
-- C2-клиент периодически отправляет DNS-запросы к подконтрольному домену (beacon).
-- Интервалы между запросами часто стабильны (регулярность).
-- Использование TXT-запросов к незнакомым доменам может указывать на C2 или канал передачи команд.
-
-### 2.2 Алгоритм 1: Beacon (регулярность интервалов)
-
-**Вход:** поток событий с полями `direction`, `timestamp_ns`, `cgroup_id`, `domain`.
+**Идея:** C2-клиент периодически опрашивает подконтрольный домен. Интервалы стабильны.
 
 **Структуры данных:**
-- `query_history[(cgroup_id, base_domain)]` — список меток времени (nanoseconds) последних **запросов** (только `direction == 'query'`).
+- `query_history: OrderedDict[(cgroup_id, base_domain)] → [timestamp_ns, ...]` — LRU, max 10K ключей, max 20 timestamps на ключ.
 
 **Параметры:**
-- `MAX_HISTORY = 20` — храним не более 20 последних запросов на ключ.
-- `MIN_SAMPLES = 5` — минимум точек для расчёта интервалов.
-- `REGULARITY_THRESHOLD = 0.15` — порог коэффициента вариации (CV); ниже — считаем «регулярным».
-- Минимальный средний интервал: **5 секунд** (короткие интервалы не считаем beacon’ом).
+- `MAX_QUERY_HISTORY_KEYS = 10_000`
+- `MAX_HISTORY = 20`
+- `MIN_SAMPLES = 5`
+- `REGULARITY_THRESHOLD = 0.15` (CV)
+- Минимальный средний интервал: 5 секунд
 
 **Шаги:**
-1. Из `domain` выделить **base_domain** — последние два компонента (например, `example.com`). Ключ: `(cgroup_id, base_domain)`.
-2. Если событие — **query** и есть `timestamp_ns`, добавить `timestamp_ns` в `query_history[key]`; обрезать список до последних `MAX_HISTORY` элементов.
-3. Если в истории не меньше `MIN_SAMPLES` и есть текущий `timestamp_ns`:
-   - Вычислить интервалы между последовательными запросами:  
-     `intervals[i] = (timestamps[i+1] - timestamps[i]) / 1e9` (в секундах).
-   - Средний интервал: `avg_interval = mean(intervals)`.
-   - Дисперсия: `variance = mean((x - avg_interval)^2)`.
-   - Среднеквадратичное отклонение: `std_dev = sqrt(variance)`.
-   - Коэффициент вариации: `cv = std_dev / avg_interval` (при `avg_interval > 0`).
-4. **Срабатывание:** если `cv < REGULARITY_THRESHOLD` и `avg_interval > 5`, пометить как подозрительное с причиной вида  
-   `C2_BEACON(interval=<avg_interval>s, regularity=<1-cv>)`.
+1. Из домена извлечь `base_domain` = последние 2 компонента. Ключ: `(cgroup_id, base_domain)`.
+2. Если событие — **query** (direction по QR-биту): добавить timestamp в историю, обрезать до 20, переместить ключ в конец OrderedDict. Если ключей > 10K, вытеснить старейший (LRU).
+3. Если в истории ≥ 5 timestamps:
+   - Вычислить интервалы: `intervals[i] = (ts[i+1] - ts[i]) / 1e9`
+   - Среднее: `avg_interval = mean(intervals)`
+   - CV: `std_dev / avg_interval`
+4. Если `CV < 0.15` и `avg_interval > 5` → `C2_BEACON` (вес 3)
 
-**Формула регулярности:** по сути низкий CV означает, что интервалы мало отклоняются от среднего (стабильный «пульс» запросов).
+**Формула:**
+```
+intervals[i] = (timestamps[i+1] - timestamps[i]) / 1e9
+avg = mean(intervals)
+variance = mean((x - avg)^2 for x in intervals)
+cv = sqrt(variance) / avg
+```
 
-### 2.3 Алгоритм 2: TXT-запросы к недоверенным доменам
+### 2.2 Алгоритм 2: TXT-запросы к недоверенным доменам
 
-**Вход:** `dns_type`, `domain` (base_domain).
+**Правило:** Если `dns_type == 16` (TXT) и домен **не** в расширенном whitelist (27 доменов + ACME challenge) → `C2_TXT_REQUEST` (вес 1).
 
-**Правило:**
-- Если `dns_type == 16` (TXT) и **base_domain** не заканчивается на `.google.com`, `.microsoft.com` или `.cloudflare.com` → причина `C2_TXT_REQUEST`.
+**Whitelist:** google.com, googleapis.com, microsoft.com, cloudflare.com, amazonaws.com, github.com, githubusercontent.com, atlassian.com, fastly.com, apple.com, googledomains.com, yandex.ru, yandex.net, cloudflare.net, akamai.net, facebook.com, meta.com, twitter.com, linkedin.com, zoom.us, slack.com, dropbox.com, box.com, stripe.com, paypal.com, spotify.com, twitch.tv, redhat.com, openshift.com, kubernetes.io, k8s.io.
 
-Используется как эвристика: легитимный TXT часто к известным провайдерам; TXT к произвольным доменам может быть каналом C2 или данных.
+**Исключение:** `_acme-challenge.*` (Let's Encrypt DNS-01, cert-manager) пропускается.
 
 ---
 
@@ -69,52 +75,50 @@
 
 **Файл:** `detectors/exfil.py`
 
-**Идея:** данные выносятся в поддоменах (или в запросе) в закодированном виде — длинные строки, высокая энтропия, Base64/hex, много уникальных поддоменов.
-
 ### 3.1 Энтропия домена
 
-**Вход:** строка домена (без точек для расчёта энтропии: `domain_clean = domain.replace('.', '')`).
-
-**Формула (Шеннон по символам):**
+**Формула (Шеннон):**
 ```
-H = - Σ p(c) * log2(p(c))
+H = -Σ p(c) × log2(p(c))
 ```
-где `p(c)` — частота символа `c` в строке. Реализация: `dns_parsing.calculate_entropy(domain_clean)`.
+где `p(c)` — частота символа в `domain.replace('.', '')`.
 
-**Порог:** `ENTROPY_THRESHOLD = 4.0`.  
-Если `entropy > 4.0` → причина `HIGH_ENTROPY(<value>)` (высокая случайность строки, типично для сжатых/зашифрованных данных).
+**Порог:** `ENTROPY_THRESHOLD = 4.0` → `HIGH_ENTROPY` (вес 2).
+
+**Известное ограничение:** энтропия считается по всему домену включая base_domain, а не только по поддомену. Это снижает чувствительность.
 
 ### 3.2 Длина домена
 
-**Порог:** `LENGTH_THRESHOLD = 60` символов.  
-Если `len(domain) > 60` → причина `LONG_DOMAIN(<len>)`.
+**Порог:** `LENGTH_THRESHOLD = 60`.
+
+**Статус:** **Фактически не работает** при 64-байтном payload (домен ≤ ~45 символов). Оставлено на случай будущего увеличения payload. Вес 1.
 
 ### 3.3 Доля цифр
 
-**Порог:** `DIGIT_RATIO_THRESHOLD = 0.3`.  
-`digit_ratio = (число цифр в domain_clean) / len(domain_clean)`.  
-Если `digit_ratio > 0.3` → причина `HIGH_DIGIT_RATIO(<ratio>)`.
+`digit_ratio = (число цифр) / len(domain без точек)`.  
+**Порог:** `DIGIT_RATIO_THRESHOLD = 0.3` → `HIGH_DIGIT_RATIO` (вес 1).
 
 ### 3.4 Кодирование в первом поддомене
 
-Если в домене больше двух частей, берётся **первый** поддомен (первая метка):
-- Длина первой метки > 20 символов **и**
-- Строка совпадает с регулярным выражением:
-  - `^[A-Za-z0-9+/=]+$` → причина `BASE64_SUBDOMAIN`;
-  - `^[0-9a-fA-F]+$` → причина `HEX_SUBDOMAIN`.
+Если домен имеет > 2 частей и первый поддомен > 20 символов:
+
+1. **Hex** (проверяется первым): `^[0-9a-fA-F]+$` → `HEX_SUBDOMAIN` (вес 2)
+2. **Base64** (если не hex): `^[A-Za-z0-9+/=]+$` → `BASE64_SUBDOMAIN` (вес 2)
+
+Порядок важен: hex — подмножество base64, поэтому hex проверяется первым.
 
 ### 3.5 Много уникальных поддоменов
 
-**Структура данных:** `subdomain_counts[base_domain]` — множество уникальных поддоменов (всё до последних двух меток) для каждого base_domain.
+**Структура данных:** `subdomain_counts: defaultdict(list)` — для каждого base_domain хранит до 50 уникальных поддоменов (FIFO eviction).
 
-**Порог:** `SUBDOMAIN_COUNT_THRESHOLD = 20`.  
-Если для данного base_domain накопилось больше 20 уникальных поддоменов → причина `MANY_SUBDOMAINS(<count>)`.
+**Порог:** `SUBDOMAIN_COUNT_THRESHOLD = 20` → `MANY_SUBDOMAINS` (вес 2).
 
 **Параметры (сводка):**
 - `ENTROPY_THRESHOLD = 4.0`
-- `LENGTH_THRESHOLD = 60`
+- `LENGTH_THRESHOLD = 60` (не работает при 64B payload)
 - `DIGIT_RATIO_THRESHOLD = 0.3`
 - `SUBDOMAIN_COUNT_THRESHOLD = 20`
+- `MAX_SUBDOMAINS_STORED = 50`
 
 ---
 
@@ -122,76 +126,118 @@ H = - Σ p(c) * log2(p(c))
 
 **Файл:** `detectors/ip_over_dns.py`
 
-**Идея:** туннели вроде **iodine** используют специальные типы записей (NULL) и высокую частоту запросов; ответы могут содержать много записей.
-
-### 4.1 Скользящее окно и rate
+### 4.1 Per-key окно и rate
 
 **Структуры данных:**
-- `request_counts[(cgroup_id, base_domain)]` — счётчик запросов в текущем окне.
-- `window_start` — начало текущего окна (nanoseconds).
+- `request_counts: defaultdict(int)` — счётчик запросов per key
+- `first_seen_ns: dict` — timestamp первого события per key в текущем окне
 
 **Параметры:**
-- `WINDOW_NS = 10 * 1e9` — длина окна 10 секунд (в наносекундах).
-- `RATE_THRESHOLD = 50` — запросов в секунду.
+- `WINDOW_NS = 10 × 1e9` (10 секунд)
+- `RATE_THRESHOLD = 50` запросов/сек
 
 **Алгоритм:**
-1. При первом событии с `timestamp_ns` установить `window_start = timestamp_ns`.
-2. Если `timestamp_ns - window_start > WINDOW_NS`, сбросить `request_counts` и положить `window_start = timestamp_ns` (новое окно).
-3. Увеличить `request_counts[key]` для текущего `(cgroup_id, base_domain)`.
-4. Если с начала окна прошло больше 1 секунды:  
-   `elapsed_sec = (timestamp_ns - window_start) / 1e9`,  
-   `rate = request_counts[key] / elapsed_sec`.  
-   Если `rate > RATE_THRESHOLD` → причина `HIGH_RATE(<rate>/sec)`.
+1. Ключ: `(cgroup_id, base_domain)`.
+2. Если ключ уже имеет `first_seen_ns` и прошло > 10 секунд → сброс **только этого ключа**: `first_seen_ns[key] = timestamp`, `request_counts[key] = 0`.
+3. Если ключ новый → `first_seen_ns[key] = timestamp`.
+4. `request_counts[key] += 1`.
+5. `elapsed_sec = (timestamp - first_seen_ns[key]) / 1e9`.
+6. Если `elapsed_sec > 1`: `rate = request_counts[key] / elapsed_sec`.
+7. Если `rate > 50` → `HIGH_RATE` (вес 3).
 
 ### 4.2 NULL-запись (тип 10)
 
-Если `dns_type == 10` (NULL) → причина `NULL_RECORD(iodine)`.  
-Тип 10 редко используется в обычном DNS; характерен для iodine и подобных туннелей.
+Если `dns_type == 10` → `NULL_RECORD(iodine)` (вес 2).
 
 ### 4.3 Много записей в ответе
 
-Используется поле ответа (из заголовка DNS): `dns_answers` (число записей в ответе).  
-Если `dns_answers > 5` → причина `MANY_ANSWERS(<count>)`.
+Если `dns_answers > 5` → `MANY_ANSWERS` (вес 2).
 
 **Параметры (сводка):**
-- `WINDOW_NS = 10e9` (10 с)
+- `WINDOW_NS = 10e9` (10 с), per-key
 - `RATE_THRESHOLD = 50` запросов/с
-- Порог по ответам: **5** записей
+- Порог ответов: 5 записей
 
 ---
 
-## 5. Сводная таблица порогов
-
-| Детектор | Параметр | Значение | Смысл |
-|----------|----------|----------|--------|
-| C2 | MAX_HISTORY | 20 | Макс. запросов в истории на (cgroup, base_domain) |
-| C2 | MIN_SAMPLES | 5 | Минимум точек для расчёта интервалов beacon |
-| C2 | REGULARITY_THRESHOLD | 0.15 | CV < 0.15 ⇒ регулярный интервал |
-| C2 | min avg_interval | 5 с | Минимальный средний интервал для beacon |
-| C2 | TXT whitelist | .google.com, .microsoft.com, .cloudflare.com | Не помечаем TXT к этим доменам |
-| Exfil | ENTROPY_THRESHOLD | 4.0 | Энтропия (бит/символ) выше ⇒ подозрительно |
-| Exfil | LENGTH_THRESHOLD | 60 | Длина домена (символов) |
-| Exfil | DIGIT_RATIO_THRESHOLD | 0.3 | Доля цифр в домене |
-| Exfil | SUBDOMAIN_COUNT_THRESHOLD | 20 | Уникальных поддоменов на base_domain |
-| Exfil | min first subdomain length | 20 | Для проверки Base64/hex |
-| IP-over-DNS | WINDOW_NS | 10e9 | Окно 10 с для rate |
-| IP-over-DNS | RATE_THRESHOLD | 50 | Запросов в секунду |
-| IP-over-DNS | dns_answers threshold | 5 | Записей в ответе |
-
----
-
-## 6. Агрегация результатов
+## 5. Scoring-агрегатор
 
 **Файл:** `detectors/tunnel.py`
 
-Для каждого события вызываются по очереди:
-1. `C2Detector.check(event)`
-2. `ExfiltrationDetector.check(event)`
-3. `IPOverDNSDetector.check(event)`
+### 5.1 Веса причин
 
-Если **хотя бы один** детектор вернул «подозрительно»:
-- Событие помечается как подозрительное.
-- `threat_type` = объединение меток через `+` (например, `C2`, `EXFIL`, `TUNNEL`, `C2+EXFIL`).
-- Список причин — объединение всех `reasons` от сработавших детекторов.
+| Причина | Вес | Обоснование |
+|---------|:---:|-------------|
+| C2_BEACON | 3 | Сильный сигнал: регулярные интервалы |
+| HIGH_RATE | 3 | Сильный сигнал: аномальная частота |
+| HIGH_ENTROPY | 2 | Типично для зашифрованных/сжатых данных |
+| HEX_SUBDOMAIN | 2 | Явное кодирование |
+| BASE64_SUBDOMAIN | 2 | Явное кодирование |
+| MANY_SUBDOMAINS | 2 | Множество уникальных поддоменов = data channel |
+| NULL_RECORD | 2 | Типично для iodine |
+| MANY_ANSWERS | 2 | Типично для IP-over-DNS |
+| C2_TXT_REQUEST | 1 | Слабый сигнал: TXT легитимен для SPF/DKIM |
+| LONG_DOMAIN | 1 | Слабый сигнал (и не работает при 64B) |
+| HIGH_DIGIT_RATIO | 1 | Слабый сигнал: много цифр |
 
-Все три техники (C2, Exfil, IP-over-DNS) покрыты этими алгоритмами; текущие формулы и пороги соответствуют коду в репозитории.
+### 5.2 Алгоритм
+
+```python
+score = sum(weight for reason in reasons if reason.startswith(prefix))
+is_suspicious = (score >= SCORE_THRESHOLD)  # SCORE_THRESHOLD = 2
+```
+
+**Следствия:**
+- Один `C2_TXT_REQUEST` (вес 1) → **не** suspicious (score 1 < 2)
+- Один `HIGH_DIGIT_RATIO` (вес 1) → **не** suspicious
+- `HIGH_ENTROPY` (вес 2) → suspicious (score 2 ≥ 2)
+- `C2_BEACON` (вес 3) → suspicious
+- `C2_TXT_REQUEST` + `HIGH_DIGIT_RATIO` (1 + 1 = 2) → suspicious (комбинация слабых сигналов)
+
+### 5.3 Объединение threat_type
+
+`threat_type = '+'.join(["C2", "EXFIL", "TUNNEL"])` — для каждого сработавшего детектора.
+
+---
+
+## 6. Сводная таблица порогов
+
+| Детектор | Параметр | Значение | Configurable |
+|----------|----------|----------|:------------:|
+| C2 | MAX_QUERY_HISTORY_KEYS | 10,000 | Нет (код) |
+| C2 | MAX_HISTORY | 20 | Нет |
+| C2 | MIN_SAMPLES | 5 | Нет |
+| C2 | REGULARITY_THRESHOLD | 0.15 | Нет |
+| C2 | min avg_interval | 5 с | Нет |
+| C2 | TXT whitelist | 27 доменов + ACME | Нет (код) |
+| Exfil | ENTROPY_THRESHOLD | 4.0 | Нет |
+| Exfil | LENGTH_THRESHOLD | 60 (не работает) | Нет |
+| Exfil | DIGIT_RATIO_THRESHOLD | 0.3 | Нет |
+| Exfil | SUBDOMAIN_COUNT_THRESHOLD | 20 | Нет |
+| Exfil | MAX_SUBDOMAINS_STORED | 50 | Нет |
+| IP-over-DNS | WINDOW_NS | 10e9 (10 с) | Нет |
+| IP-over-DNS | RATE_THRESHOLD | 50 req/s | Нет |
+| IP-over-DNS | dns_answers threshold | 5 | Нет |
+| Aggregator | SCORE_THRESHOLD | 2 | Нет |
+| Cluster DNS | CLUSTER_DNS_SUFFIXES | .svc.cluster.local, ... | **Да** (env) |
+| Pod resolver | CACHE_TTL | 300 с | **Да** (env) |
+
+---
+
+## 7. Что работает / не работает при 64B payload
+
+| Проверка | Работает? | Комментарий |
+|----------|:---------:|-------------|
+| C2_BEACON | Да | Зависит от timestamps, не от payload |
+| C2_TXT_REQUEST | Да | Зависит от dns_type |
+| HIGH_ENTROPY | Да | На усечённом домене (до ~45 символов); менее чувствителен |
+| HIGH_DIGIT_RATIO | Да | На усечённом домене |
+| HEX_SUBDOMAIN | Да | first_subdomain до ~30 символов (base ~15) |
+| BASE64_SUBDOMAIN | Да | Аналогично |
+| MANY_SUBDOMAINS | Да | Зависит от count, не от длины |
+| HIGH_RATE | Да | Зависит от count/time |
+| NULL_RECORD | Да | Зависит от dns_type |
+| MANY_ANSWERS | Да | Из DNS header (bytes 6-7) |
+| **LONG_DOMAIN** | **Нет** | Домен max ~45 символов, порог 60 |
+
+**10 из 11 проверок работают.**

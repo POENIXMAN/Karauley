@@ -1,35 +1,47 @@
 """IP-Over-DNS detector: NULL records, high rate, many answers."""
-from collections import defaultdict
+from collections import OrderedDict
 
 
 class IPOverDNSDetector:
+    # NEW-01: ограничение числа ключей — LRU eviction (как в c2.py)
+    MAX_KEYS = 10_000
+
     def __init__(self):
-        self.request_counts = defaultdict(int)
-        self.window_start = 0
+        # key -> (request_count, first_seen_ns); OrderedDict для LRU
+        self._key_data = OrderedDict()
         self.WINDOW_NS = 10 * 1e9
         self.RATE_THRESHOLD = 50
 
     def check(self, event):
         reasons = []
         timestamp = event.get('timestamp_ns', 0)
-        if self.window_start == 0 and timestamp:
-            self.window_start = timestamp
-        elif timestamp and timestamp - self.window_start > self.WINDOW_NS:
-            self.request_counts.clear()
-            self.window_start = timestamp
-
         domain = event.get('domain', '')
         parts = domain.split('.')
         base_domain = '.'.join(parts[-2:]) if len(parts) >= 2 else domain
         key = (event.get('cgroup_id', 0), base_domain)
-        self.request_counts[key] += 1
 
-        if timestamp and self.window_start:
-            elapsed_sec = (timestamp - self.window_start) / 1e9
-            if elapsed_sec > 1:
-                rate = self.request_counts[key] / elapsed_sec
-                if rate > self.RATE_THRESHOLD:
-                    reasons.append(f"HIGH_RATE({rate:.1f}/sec)")
+        if key in self._key_data:
+            count, first_seen = self._key_data.pop(key)
+            if timestamp and (timestamp - first_seen) > self.WINDOW_NS:
+                first_seen = timestamp
+                count = 0
+            count += 1
+            self._key_data[key] = (count, first_seen)
+        else:
+            if len(self._key_data) >= self.MAX_KEYS:
+                self._key_data.popitem(last=False)
+            first_seen = timestamp if timestamp else 0
+            count = 1
+            self._key_data[key] = (count, first_seen)
+
+        if timestamp and self._key_data.get(key):
+            count, first_seen = self._key_data[key]
+            if first_seen:
+                elapsed_sec = (timestamp - first_seen) / 1e9
+                if elapsed_sec > 1:
+                    rate = count / elapsed_sec
+                    if rate > self.RATE_THRESHOLD:
+                        reasons.append(f"HIGH_RATE({rate:.1f}/sec)")
 
         dns_type = event.get('dns_type', 1)
         if dns_type == 10:

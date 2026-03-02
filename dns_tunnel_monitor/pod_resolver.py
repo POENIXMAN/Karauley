@@ -2,11 +2,14 @@
 import os
 import stat
 import sys
+import time
 import ctypes
 import json
 import ssl
 import urllib.error
 import urllib.request
+
+from dns_tunnel_monitor import config
 
 # Set DEBUG_POD_RESOLVER=1 in the pod to log why resolution falls back to cgroup_id.
 _DEBUG = os.environ.get("DEBUG_POD_RESOLVER", "").strip().lower() in ("1", "true", "yes")
@@ -181,11 +184,12 @@ def _k8s_resolve_uid_to_ns_name(uid_12):
 
 
 class PodResolver:
-    """Resolve cgroup_id to ns/podname and (best-effort) process name."""
+    """Resolve cgroup_id to ns/podname and (best-effort) process name. BUG-26: кэш с TTL."""
 
     def __init__(self):
-        # cgroup_id -> {"client_pod": str, "process": str}
+        # cgroup_id -> {"client_pod": str, "process": str, "ts_ns": int}  (ts_ns = time.monotonic_ns())
         self._cache = {}
+        self._ttl_ns = config.POD_RESOLVER_CACHE_TTL_SEC * 10**9
 
     def resolve(self, cgroup_id):
         """Return client_pod string (ns/name or cgroup_id=...). Backward compatible."""
@@ -200,10 +204,18 @@ class PodResolver:
     def _resolve_entry(self, cgroup_id):
         if cgroup_id == 0:
             return {"client_pod": "host", "process": "host"}
+        now_ns = time.monotonic_ns()
         if cgroup_id in self._cache:
-            return self._cache[cgroup_id]
+            cached = self._cache[cgroup_id]
+            if now_ns - cached["ts_ns"] < self._ttl_ns:
+                return {"client_pod": cached["client_pod"], "process": cached["process"]}
+            del self._cache[cgroup_id]
         out = self._do_resolve(cgroup_id)
-        self._cache[cgroup_id] = out
+        self._cache[cgroup_id] = {
+            "client_pod": out["client_pod"],
+            "process": out["process"],
+            "ts_ns": now_ns,
+        }
         return out
 
     def _do_resolve(self, cgroup_id):

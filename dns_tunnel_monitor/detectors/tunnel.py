@@ -1,7 +1,35 @@
-"""TunnelDetector: runs C2, Exfil, IP-Over-DNS."""
+"""TunnelDetector: runs C2, Exfil, IP-Over-DNS. ISSUE-22: scoring вместо бинарного OR."""
+from dns_tunnel_monitor import config
 from dns_tunnel_monitor.detectors.c2 import C2Detector
 from dns_tunnel_monitor.detectors.exfil import ExfiltrationDetector
 from dns_tunnel_monitor.detectors.ip_over_dns import IPOverDNSDetector
+
+# Веса причин: сильные сигналы (beacon, rate, NULL) — выше; один слабый (TXT) не даёт алерт
+REASON_WEIGHTS = {
+    "C2_BEACON": 3,
+    "C2_TXT_REQUEST": 1,
+    "HIGH_ENTROPY": 2,
+    "LONG_DOMAIN": 1,
+    "HIGH_DIGIT_RATIO": 1,
+    "HEX_SUBDOMAIN": 2,
+    "BASE64_SUBDOMAIN": 2,
+    "MANY_SUBDOMAINS": 2,
+    "HIGH_RATE": 3,
+    "NULL_RECORD": 2,
+    "MANY_ANSWERS": 2,
+}
+SCORE_THRESHOLD = 2 
+
+
+def _score_reasons(reasons):
+    """Сумма весов по префиксу причины (например HIGH_ENTROPY(4.5) -> HIGH_ENTROPY)."""
+    total = 0
+    for r in reasons:
+        for prefix, w in REASON_WEIGHTS.items():
+            if r.startswith(prefix):
+                total += w
+                break
+    return total
 
 
 class TunnelDetector:
@@ -11,6 +39,11 @@ class TunnelDetector:
         self.ipodns_detector = IPOverDNSDetector()
 
     def analyze(self, event):
+        # K8S: не детектируем cluster-internal DNS (ложные срабатывания на service discovery)
+        domain = event.get("domain", "") or ""
+        if domain and any(domain.endswith(s) for s in config.CLUSTER_DNS_SUFFIXES):
+            return False, None, []
+
         all_reasons = []
         threat_types = []
 
@@ -29,6 +62,7 @@ class TunnelDetector:
             threat_types.append("TUNNEL")
             all_reasons.extend(ipodns_reasons)
 
-        is_suspicious = len(all_reasons) > 0
+        score = _score_reasons(all_reasons)
+        is_suspicious = score >= SCORE_THRESHOLD
         threat_type = '+'.join(threat_types) if threat_types else None
         return is_suspicious, threat_type, all_reasons
