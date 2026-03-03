@@ -65,4 +65,4 @@ class TunnelDetector:
         score = _score_reasons(all_reasons)
         is_suspicious = score >= SCORE_THRESHOLD
         threat_type = '+'.join(threat_types) if threat_types else None
-        return is_suspicious, threat_type, all_reasons
+        return is_suspicious, threat_type, all_reasons, score

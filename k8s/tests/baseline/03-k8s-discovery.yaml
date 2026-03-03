@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: k8s-discovery-baseline
+  namespace: default
+  labels:
+    app: baseline-traffic
+    component: k8s-discovery
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: baseline-traffic
+      component: k8s-discovery
+  template:
+    metadata:
+      labels:
+        app: baseline-traffic
+        component: k8s-discovery
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: baseline-traffic
+              component: k8s-discovery
+      containers:
+        - name: discovery
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "Starting k8s-discovery on node: $(hostname)"
+              while true; do
+                # --- Standard service lookups (A records) ---
+                nslookup kubernetes.default.svc.cluster.local 2>/dev/null || true
+                nslookup kube-dns.kube-system.svc.cluster.local 2>/dev/null || true
+                nslookup kubernetes.default 2>/dev/null || true
+
+                # --- SRV records for service ports ---
+                nslookup -type=srv _https._tcp.kubernetes.default.svc.cluster.local 2>/dev/null || true
+                nslookup -type=srv _dns._udp.kube-dns.kube-system.svc.cluster.local 2>/dev/null || true
+                nslookup -type=srv _dns-tcp._tcp.kube-dns.kube-system.svc.cluster.local 2>/dev/null || true
+                nslookup -type=srv _metrics._tcp.kube-dns.kube-system.svc.cluster.local 2>/dev/null || true
+
+                # --- System services ---
+                for svc in metrics-server coredns kube-scheduler kube-controller-manager etcd-main; do
+                  nslookup "${svc}.kube-system.svc.cluster.local" 2>/dev/null || true
+                done
+
+                # --- Namespace-scoped lookups ---
+                for ns in default kube-system kube-public kube-node-lease; do
+                  nslookup "kubernetes.${ns}.svc.cluster.local" 2>/dev/null || true
+                done
+
+                # --- Headless service simulation (individual pod DNS) ---
+                for i in 0 1 2; do
+                  nslookup "pod-${i}.headless-svc.default.svc.cluster.local" 2>/dev/null || true
+                done
+
+                # --- Reverse DNS lookups for cluster IPs ---
+                nslookup -type=ptr 10.96.0.1 2>/dev/null || true
+                nslookup -type=ptr 10.96.0.10 2>/dev/null || true
+
+                # --- Short-name lookups (ndots/search path exercise) ---
+                nslookup kubernetes 2>/dev/null || true
+                nslookup kube-dns 2>/dev/null || true
+                nslookup localhost 2>/dev/null || true
+
+                # --- CNAME lookups ---
+                nslookup -type=cname www.google.com 2>/dev/null || true
+                nslookup -type=cname www.github.com 2>/dev/null || true
+                nslookup -type=cname cdn.jsdelivr.net 2>/dev/null || true
+
+                # --- Non-existent services (NXDOMAIN — normal for discovery) ---
+                for i in 1 2 3 4 5; do
+                  nslookup "svc-probe-${i}.default.svc.cluster.local" 2>/dev/null || true
+                done
+
+                sleep 3
+              done
+          resources:
+            requests:
+              cpu: 20m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+      restartPolicy: Always

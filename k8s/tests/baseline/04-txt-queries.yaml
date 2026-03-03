@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: txt-queries-baseline
+  namespace: default
+  labels:
+    app: baseline-traffic
+    component: txt-queries
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: baseline-traffic
+      component: txt-queries
+  template:
+    metadata:
+      labels:
+        app: baseline-traffic
+        component: txt-queries
+    spec:
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: baseline-traffic
+              component: txt-queries
+      containers:
+        - name: txt-dig
+          image: alpine:3.19
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache bind-tools > /dev/null 2>&1
+              echo "Starting TXT query generator on node: $(hostname)"
+
+              DOMAINS_FILE="/config/txt-domains.txt"
+
+              while true; do
+                while IFS= read -r domain; do
+                  [ -z "$domain" ] && continue
+
+                  # SPF record
+                  dig +short TXT "$domain" 2>/dev/null || true
+                  sleep 0.5
+
+                  # DKIM selector lookups
+                  for selector in default google s1 s2 k1 selector1 selector2 mail dkim; do
+                    dig +short TXT "${selector}._domainkey.${domain}" 2>/dev/null || true
+                    sleep 0.3
+                  done
+
+                  # DMARC
+                  dig +short TXT "_dmarc.${domain}" 2>/dev/null || true
+                  sleep 0.3
+
+                  # MTA-STS
+                  dig +short TXT "_mta-sts.${domain}" 2>/dev/null || true
+                  sleep 0.3
+
+                  # ACME challenge (Let's Encrypt validation)
+                  dig +short TXT "_acme-challenge.${domain}" 2>/dev/null || true
+                  sleep 0.3
+
+                  # BIMI
+                  dig +short TXT "default._bimi.${domain}" 2>/dev/null || true
+                  sleep 0.3
+
+                  # MX record (not TXT, but common legitimate query)
+                  dig +short MX "$domain" 2>/dev/null || true
+                  sleep 0.3
+
+                  # SOA record
+                  dig +short SOA "$domain" 2>/dev/null || true
+                  sleep 0.5
+
+                done < "$DOMAINS_FILE"
+
+                echo "--- TXT query cycle complete ---"
+                sleep 5
+              done
+          volumeMounts:
+            - name: txt-domains
+              mountPath: /config
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: txt-domains
+          configMap:
+            name: txt-domains
+      restartPolicy: Always

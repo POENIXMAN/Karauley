@@ -1,4 +1,6 @@
 """Handle normalized DNS event: stats, detectors, metrics, log."""
+import json
+import sys
 from collections import defaultdict
 
 from dns_tunnel_monitor import config
@@ -71,12 +73,27 @@ def handle_event(event):
         "cgroup_id": event.get("cgroup_id", 0),
         "timestamp_ns": event.get("timestamp_ns", 0),
     }
-    is_suspicious, threat_type, threat_reasons = tunnel_detector.analyze(event_data)
+    is_suspicious, threat_type, threat_reasons, score = tunnel_detector.analyze(event_data)
 
     if is_suspicious:
         stats["suspicious"] += 1
         if metrics.FLASK_AVAILABLE:
             metrics.dns_suspicious_total.labels(threat_type=threat_type or "UNKNOWN").inc()
+
+    # Structured JSON log to stderr for automated parsing (testing, confusion matrix)
+    json_record = {
+        "ts": event.get("timestamp_ns", 0),
+        "domain": domain,
+        "direction": direction,
+        "dns_type": dns_type,
+        "pod": client_pod,
+        "process": process,
+        "suspicious": is_suspicious,
+        "score": score,
+        "threat_type": threat_type,
+        "reasons": threat_reasons,
+    }
+    print(json.dumps(json_record, ensure_ascii=False), file=sys.stderr)
 
     color = RED if is_suspicious else (BLUE if is_response else GREEN)
     dir_label = "RESPONSE" if is_response else "QUERY"
