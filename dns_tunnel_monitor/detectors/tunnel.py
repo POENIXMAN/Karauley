@@ -39,10 +39,15 @@ class TunnelDetector:
         self.ipodns_detector = IPOverDNSDetector()
 
     def analyze(self, event):
-        # K8S: не детектируем cluster-internal DNS (ложные срабатывания на service discovery)
         domain = event.get("domain", "") or ""
-        if domain and any(domain.endswith(s) for s in config.CLUSTER_DNS_SUFFIXES):
-            return False, None, []
+
+        # Пропускаем события без распознанного домена (payload 64 байта, домен обрезан)
+        if not domain or domain.startswith("<"):
+            return False, None, [], 0
+
+        # K8S: не детектируем cluster-internal DNS (ложные срабатывания на service discovery)
+        if any(domain.endswith(s) for s in config.CLUSTER_DNS_SUFFIXES):
+            return False, None, [], 0
 
         all_reasons = []
         threat_types = []

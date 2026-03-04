@@ -45,9 +45,21 @@ class C2Detector:
 
         dns_type = event.get('dns_type', 1)
         if dns_type == 16:
-            # ISSUE-12: расширенный whitelist легитимных TXT (SPF/DKIM/DMARC, CDN, ACME, облака)
             domain_full = event.get('domain', '')
-            txt_whitelist = (
+
+            # Легитимные TXT-префиксы: SPF/DKIM/DMARC/MTA-STS/BIMI/ACME — всегда легитимные
+            legit_txt_prefixes = (
+                '_dmarc.', '_domainkey.', '_mta-sts.', '_smtp._tls.',
+                '_acme-challenge.', '_bimi.', '_dnslink.',
+                '_spf.', '_amazonses.', '_google.',
+            )
+            is_legit_txt_prefix = any(
+                domain_full.startswith(p) or f'.{p}' in domain_full
+                for p in legit_txt_prefixes
+            )
+
+            # Домены, TXT которых всегда легитимны (root SPF, etc.)
+            txt_whitelist_domains = (
                 '.google.com', '.googleapis.com', '.microsoft.com', '.cloudflare.com',
                 '.amazonaws.com', '.github.com', '.githubusercontent.com', '.atlassian.com',
                 '.fastly.com', '.apple.com', '.googledomains.com', '.yandex.ru', '.yandex.net',
@@ -55,10 +67,30 @@ class C2Detector:
                 '.linkedin.com', '.zoom.us', '.slack.com', '.dropbox.com', '.box.com',
                 '.stripe.com', '.paypal.com', '.spotify.com', '.twitch.tv', '.redhat.com',
                 '.openshift.com', '.kubernetes.io', '.k8s.io',
+                '.netflix.com', '.adobe.com', '.oracle.com', '.ibm.com', '.cisco.com',
+                '.vmware.com', '.salesforce.com', '.hubspot.com', '.mailchimp.com',
+                '.sendgrid.com', '.postmark.pm', '.protonmail.com', '.tutanota.com',
+                '.yahoo.com', '.mail.ru', '.outlook.com', '.icloud.com',
+                '.shopify.com', '.wordpress.com', '.notion.so', '.figma.com', '.vercel.com',
+                '.docker.com', '.nginx.com', '.nginx.org', '.debian.org', '.ubuntu.com',
+                '.mozilla.org', '.discord.com',
             )
-            if '_acme-challenge.' in domain_full or domain_full.startswith('_acme-challenge.'):
-                pass  # Let's Encrypt DNS-01, cert-manager
-            elif not any(base_domain.endswith(w) for w in txt_whitelist):
+
+            is_whitelisted_domain = (
+                domain_full in ('google.com', 'yahoo.com', 'microsoft.com', 'apple.com',
+                                'amazon.com', 'facebook.com', 'twitter.com', 'linkedin.com',
+                                'github.com', 'cloudflare.com', 'netflix.com', 'spotify.com',
+                                'adobe.com', 'oracle.com', 'ibm.com', 'cisco.com', 'vmware.com',
+                                'salesforce.com', 'slack.com', 'zoom.us', 'dropbox.com',
+                                'mailchimp.com', 'sendgrid.com', 'paypal.com', 'stripe.com',
+                                'shopify.com', 'wordpress.com', 'reddit.com', 'mozilla.org',
+                                'gitlab.com', 'atlassian.com', 'notion.so', 'figma.com',
+                                'protonmail.com', 'tutanota.com', 'fastmail.com', 'zoho.com',
+                                'yandex.ru', 'mail.ru', 'outlook.com', 'icloud.com')
+                or any(domain_full.endswith(w) for w in txt_whitelist_domains)
+            )
+
+            if not is_legit_txt_prefix and not is_whitelisted_domain:
                 reasons.append("C2_TXT_REQUEST")
 
         return len(reasons) > 0, reasons

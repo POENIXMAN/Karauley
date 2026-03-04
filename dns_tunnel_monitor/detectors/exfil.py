@@ -14,7 +14,7 @@ class ExfiltrationDetector:
         self.ENTROPY_THRESHOLD = 4.0
         self.LENGTH_THRESHOLD = 60
         self.DIGIT_RATIO_THRESHOLD = 0.3
-        self.SUBDOMAIN_COUNT_THRESHOLD = 20
+        self.SUBDOMAIN_COUNT_THRESHOLD = 40
 
     def check(self, event):
         reasons = []
