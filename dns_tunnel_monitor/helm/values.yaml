@@ -77,6 +77,29 @@ env:
   # Set to "1" to log why cgroup_id -> pod name resolution fails (stderr); then check pod logs.
   DEBUG_POD_RESOLVER: "1"
 
+# TXT whitelist from file — без пересборки образа. UTF-8 (русские/китайские домены).
+# Включить и смонтировать ConfigMap с файлом txt_whitelist.txt.
+# Формат файла: секции [domains], [prefixes], [roots]; запись из файла добавляется к встроенному списку.
+txtWhitelist:
+  enabled: false
+  # Если true — создаётся ConfigMap из content ниже и монтируется в под.
+  # Альтернатива: создать ConfigMap вручную и указать его имя в configMapName.
+  configMapName: ""
+  # Используется только если configMapName пустой. Пример:
+  # content: |
+  #   [domains]
+  #   .mycompany.com
+  #   .рус
+  #   [prefixes]
+  #   _custom.
+  #   [roots]
+  #   mail.mycompany.com
+  content: |
+    # Пример: раскомментируйте и добавьте свои записи (UTF-8).
+    # [domains]
+    # [prefixes]
+    # [roots]
+
 labels:
   app.kubernetes.io/name: dns-tunnel-monitor
   app.kubernetes.io/component: security

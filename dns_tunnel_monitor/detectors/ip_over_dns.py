@@ -47,7 +47,7 @@ class IPOverDNSDetector:
         if dns_type == 10:
             reasons.append("NULL_RECORD(iodine)")
         dns_answers = event.get('dns_answers', 0)
-        if dns_answers > 10:
+        if dns_answers > 15:
             reasons.append(f"MANY_ANSWERS({dns_answers})")
 
         return len(reasons) > 0, reasons

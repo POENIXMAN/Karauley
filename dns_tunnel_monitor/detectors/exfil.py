@@ -11,7 +11,7 @@ class ExfiltrationDetector:
 
     def __init__(self):
         self.subdomain_counts = defaultdict(list)  # list для ограничения размера (evict oldest)
-        self.ENTROPY_THRESHOLD = 4.0
+        self.ENTROPY_THRESHOLD = 4.1
         self.LENGTH_THRESHOLD = 60
         self.DIGIT_RATIO_THRESHOLD = 0.3
         self.SUBDOMAIN_COUNT_THRESHOLD = 40

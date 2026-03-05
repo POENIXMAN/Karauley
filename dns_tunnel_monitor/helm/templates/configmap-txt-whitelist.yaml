@@ -1,0 +1,12 @@
+{{- if and .Values.txtWhitelist.enabled (not .Values.txtWhitelist.configMapName) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dns-tunnel-monitor.fullname" . }}-txt-whitelist
+  namespace: {{ include "dns-tunnel-monitor.namespace" . }}
+  labels:
+    {{- include "dns-tunnel-monitor.labels" . | nindent 4 }}
+data:
+  txt_whitelist.txt: |
+{{ .Values.txtWhitelist.content | indent 4 }}
+{{- end }}

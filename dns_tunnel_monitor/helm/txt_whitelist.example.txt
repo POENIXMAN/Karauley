@@ -1,0 +1,21 @@
+# TXT whitelist — добавляется к встроенному списку. Файл в UTF-8 (русские/китайские домены).
+# Секции: [domains] — суффикс (.google.com), [prefixes] — префикс (_dmarc.), [roots] — точное совпадение (sendgrid.com).
+# Строки с # и пустые игнорируются.
+#
+# Использование:
+#   Helm: txtWhitelist.enabled=true, положить содержимое в values или создать ConfigMap:
+#     kubectl create configmap my-txt-whitelist --from-file=txt_whitelist.txt=./txt_whitelist.example.txt -n default
+#   В values: txtWhitelist.configMapName=my-txt-whitelist
+#   Перезапуск подов (без пересборки образа): kubectl rollout restart daemonset/dns-tunnel-monitor -n default
+
+[domains]
+# .mycompany.com
+# .рус
+# .中国
+
+[prefixes]
+# _myauth.
+
+[roots]
+# mail.mycompany.com
+# smtp.公司.cn

@@ -103,6 +103,38 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 |------------|----------|--------------|
 | CGROUP_PATH | Путь к cgroup для attach (в кластере монтируют host `/sys/fs/cgroup` как `/host-cgroup`) | /sys/fs/cgroup |
 | METRICS_PORT | HTTP-порт для /healthz, /ready, /metrics | 9999 |
+| TXT_WHITELIST_FILE | Путь к файлу TXT whitelist (UTF-8). Записи из файла **добавляются** к встроенному списку. Без пересборки образа. | — |
+
+### TXT whitelist из файла (без пересборки образа)
+
+Список легитимных TXT-доменов/префиксов можно расширять **файлом**, не трогая код и не пересобирая образ. Файл в **UTF-8** — подойдут русские, китайские и любые другие домены.
+
+**Формат файла** (пример в `helm/txt_whitelist.example.txt`):
+
+- Секции: `[domains]` — суффиксы (например `.google.com`), `[prefixes]` — префиксы (`_dmarc.`), `[roots]` — точное совпадение (`sendgrid.com`).
+- Строки с `#` и пустые игнорируются.
+- Записи из файла **добавляются** к встроенному списку.
+
+**В кластере (Helm):**
+
+1. Включить и задать содержимое в values:
+   ```yaml
+   txtWhitelist:
+     enabled: true
+     content: |
+       [domains]
+       .mycompany.com
+       .рус
+       [roots]
+       mail.mycompany.com
+   ```
+2. Или создать ConfigMap вручную и подключить его (ключ файла должен быть `txt_whitelist.txt`):
+   ```bash
+   kubectl create configmap my-txt-whitelist --from-file=txt_whitelist.txt=./my-whitelist.txt -n default
+   ```
+   В `values.yaml`: `txtWhitelist.enabled: true`, `txtWhitelist.configMapName: my-txt-whitelist`.
+
+После изменения ConfigMap или values — перезапуск подов: `kubectl rollout restart daemonset/<name> -n <namespace>`. Пересборка образа не нужна.
 
 ## Метрики (Prometheus)
 

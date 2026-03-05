@@ -53,6 +53,10 @@ spec:
             - name: DEBUG_POD_RESOLVER
               value: {{ .Values.env.DEBUG_POD_RESOLVER | quote }}
             {{- end }}
+            {{- if .Values.txtWhitelist.enabled }}
+            - name: TXT_WHITELIST_FILE
+              value: "/config/whitelist/txt_whitelist.txt"
+            {{- end }}
           volumeMounts:
             - name: host-cgroup
               mountPath: /host-cgroup
@@ -66,6 +70,11 @@ spec:
             - name: usr-src
               mountPath: /usr/src
               readOnly: true
+            {{- if .Values.txtWhitelist.enabled }}
+            - name: txt-whitelist
+              mountPath: /config/whitelist
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.daemonset.resources | nindent 12 }}
           livenessProbe:
@@ -89,6 +98,11 @@ spec:
           hostPath:
             path: /usr/src
             type: Directory
+        {{- if .Values.txtWhitelist.enabled }}
+        - name: txt-whitelist
+          configMap:
+            name: {{ .Values.txtWhitelist.configMapName | default (printf "%s-txt-whitelist" (include "dns-tunnel-monitor.fullname" .)) }}
+        {{- end }}
       tolerations:
         {{- toYaml .Values.daemonset.tolerations | nindent 8 }}
       {{- if .Values.daemonset.nodeSelector }}
