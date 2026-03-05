@@ -15,27 +15,33 @@
 
 ## Быстрый старт (Фаза B)
 
+Все команды ниже — из каталога **attack/** (не из attack/servers/). Клиенты живут в namespace `attack`, серверы — в `attack-server`.
+
 ```bash
-# 1) Один раз: серверы + CoreDNS
+# 1) Один раз: серверы + CoreDNS (из attack/)
 cd servers && bash deploy.sh setup
 # Добавить в Corefile зону attack.test → forward . <ClusterIP>, перезапустить coredns
+cd ..
 
-# 2) Namespace для клиентов
-cd .. && bash deploy.sh ns
+# 2) Namespace для клиентов и деплой клиента (из attack/)
+bash deploy.sh ns
+bash deploy.sh iodine
 
-# 3) Запустить сервер и клиент (например iodine)
+# 3) Запустить сервер (из attack/)
 cd servers && bash deploy.sh iodine
-cd .. && bash deploy.sh iodine
+cd ..
+
+# 4) Домен и перезапуск клиента
 kubectl set env deployment/iodine-client ATTACK_DOMAIN=t.attack.test -n attack
 kubectl rollout restart deployment/iodine-client -n attack
 
-# 4) Прогрев ~2 мин, затем сбор логов (из корня k8s/tests)
+# 5) Прогрев ~2 мин, затем сбор логов (из корня k8s/tests)
 bash collect.sh attack_iodine 10m
 
-# 5) Анализ
+# 6) Анализ
 python3 analyze.py results/attack_iodine.jsonl
 
-# 6) Остановить клиент и сервер
+# 7) Остановить клиент и сервер
 bash deploy.sh stop iodine
 cd servers && bash deploy.sh stop
 ```

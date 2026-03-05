@@ -76,7 +76,14 @@ kubectl rollout restart daemonset coredns -n kube-system
 kubectl get pods -n attack-server -w
 ```
 
-Затем в namespace `attack` задеплойте клиента и задайте соответствующий домен (см. README.md в `attack/`).
+**Клиенты** работают в namespace `attack`. Его создаёт и деплой клиентов делает скрипт **в каталоге attack/** (родительском к servers/), не servers/deploy.sh. Перед настройкой клиента выполните из каталога attack/:
+
+```bash
+./deploy.sh ns              # создать namespace attack
+./deploy.sh iodine          # или dnscat2, или exfil — задеплоить клиента
+```
+
+Затем задайте домен и перезапустите клиента (см. README.md).
 
 ## 4. Проверка форварда
 
