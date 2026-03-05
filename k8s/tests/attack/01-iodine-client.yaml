@@ -1,9 +1,7 @@
 # Iodine client — IP-over-DNS. Генерирует трафик: HIGH_RATE, NULL_RECORD, MANY_ANSWERS.
 #
-# Требуется: снаружи кластера должен работать iodined (сервер).
-# 1) Поднять iodined на VPS/хосте с белым IP.
-# 2) Делегировать поддомен на этот сервер (NS-запись или A для t.yourdomain.com).
-# 3) Задать ATTACK_DOMAIN (например t.yourdomain.com) и задеплоить этот манифест.
+# Сервер (iodined) работает в namespace attack-server (servers/deploy.sh iodine).
+# Задать ATTACK_DOMAIN (по умолчанию t.attack.test) и задеплоить.
 #
 # Без сервера под будет падать/рестартить — для теста детектора достаточно,
 # чтобы клиент периодически слал DNS-запросы (даже при неудачном подключении).
@@ -43,9 +41,15 @@ spec:
               fi
           env:
             - name: ATTACK_DOMAIN
-              value: "t.attack.example.com"
+              value: "t.attack.test"
             - name: ATTACK_NAMESERVER
               value: ""
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          volumeMounts:
+            - name: tun
+              mountPath: /dev/net/tun
           resources:
             requests:
               cpu: 50m
@@ -53,4 +57,9 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+      volumes:
+        - name: tun
+          hostPath:
+            path: /dev/net/tun
+            type: CharDevice
       restartPolicy: Always

