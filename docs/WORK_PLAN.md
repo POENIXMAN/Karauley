@@ -28,23 +28,25 @@
 
 | Приоритет | Задача | Статус |
 |-----------|--------|--------|
-| **1** | **Валидация TP/FP** — тестовый стенд, iodine/dnscat2, расчёт Precision/Recall/F1 | **Следующий шаг** |
-| 2 | Конфигурируемые пороги детекторов (config/env) | В плане |
-| 3 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
-| 4 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |
-| 5 | Юнит-тесты для exfil, парсинга; расширение test_timestamp_detection | В плане |
-| 6 | Сравнение с Tetragon/Falco/Zeek (overhead, coverage) | Для ВКР |
+| **1** | **Валидация TP/FP** — iodine проведён; dnscat2, DNSExfiltrator (Фаза B/C), таблица метрик для ВКР | **В работе** |
+| 2 | **Артефакты метрик:** analyze.py — опция GT по домену (`.attack.test`) или исключение транзитных подов (CoreDNS) | Рекомендовано (см. VALIDATION_FINDINGS.md) |
+| 3 | **eBPF:** проверка возврата `bpf_skb_load_bytes`; опционально поддержка IPv6 (offset 48 для DNS payload) | Рекомендовано (снижает unparseable) |
+| 4 | Конфигурируемые пороги детекторов (config/env) | В плане |
+| 5 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
+| 6 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |
+| 7 | Юнит-тесты для exfil, парсинга; расширение test_timestamp_detection | В плане |
+| 8 | Сравнение с Tetragon/Falco/Zeek (overhead, coverage) | Для ВКР |
 
 ### Тестирование TP/FP (раздел 3 плана)
 
 | Этап | Статус |
 |------|--------|
-| Деплой кластера + монитор | Не проведён |
-| Baseline легитимного трафика | Не проведён |
-| Запуск tunnel tools (iodine, dnscat2, DNSExfiltrator) | Не проведён |
-| Сбор confusion matrix, расчёт метрик | Не проведён |
+| Деплой кластера + монитор | Проведён |
+| Baseline легитимного трафика | В плане |
+| Запуск tunnel tools (iodine, dnscat2, DNSExfiltrator) | iodine проведён (Фаза B); dnscat2, exfil — в плане |
+| Сбор confusion matrix, расчёт метрик | Проведён для iodine; интерпретация — см. VALIDATION_FINDINGS.md |
 
-**Рекомендация:** критические фиксы (включая NEW-01) завершены. Следующий шаг — развернуть тестовый стенд (раздел 3.2), прогнать сценарии из 3.5 и заполнить таблицу метрик (3.1, формат для ВКР).
+**Результат iodine (Фаза B):** сырые метрики занижены из-за артефактов (unparseable query, FP на CoreDNS). По распарсенным ответам — детекция 100%, latency 0.01 с. Подробно: `docs/VALIDATION_FINDINGS.md`.
 
 ---
 
@@ -152,7 +154,7 @@ BPF cgroup_skb (64B) → perf buffer → Python парсинг → 3 детек�
 | **BUG-16** | subdomain_counts ∞ | Рост + alert fatigue | **Готово** (exfil.py, list max 50 на base_domain) |
 | **BUG-26** | PodResolver cache stale | Stale + утечка | **Готово** (pod_resolver.py, TTL 5 мин) |
 
-**Критические фиксы из плана выполнены. Дальше: валидация TP/FP (раздел 3).**
+**Критические фиксы из плана выполнены.** Валидация начата (iodine, Фаза B); выводы и расширение плана — `docs/VALIDATION_FINDINGS.md`.
 
 ---
 

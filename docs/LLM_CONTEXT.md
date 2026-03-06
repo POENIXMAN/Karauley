@@ -13,7 +13,7 @@
 - **Только UDP/IPv4 DNS** (порт 53), payload 64 байта (~45 символов домена)
 - DaemonSet с Prometheus-метриками
 
-**Готовность: ~75%.** Сквозной pipeline работает. 10 из 11 детекторных проверок работают. Следующий шаг — валидация TP/FP.
+**Готовность: ~80%.** Сквозной pipeline работает. 10 из 11 детекторных проверок работают. Валидация начата: iodine (Фаза B) — по распарсенным ответам детекция 100%, latency 0.01 с; сырые метрики занижены артефактами (см. VALIDATION_FINDINGS.md).
 
 ---
 
@@ -81,7 +81,7 @@ int egress_hook(struct __sk_buff *ctx)  { return monitor_dns(ctx, 1); }
 int ingress_hook(struct __sk_buff *ctx) { return monitor_dns(ctx, 2); }
 ```
 
-Ограничения: hardcoded IP header 20 bytes (no IP options), UDP only, 64B payload.
+Ограничения: hardcoded IP header 20 bytes (no IP options), UDP only, 64B payload. **DNS payload читается с offset 28 (IPv4).** Для IPv6 (header 40B) DNS с offset 48 — текущий код читает с 28 → мусор/нули → `<unparseable>`. Возврат `bpf_skb_load_bytes` не проверяется → при неудачном чтении payload нулевой → query часто дают `<unparseable>`; response чаще парсятся (часто IPv4).
 
 ### 4.2 Loader — `loader.py`
 
@@ -204,6 +204,7 @@ ServiceMonitor for Prometheus Operator.
 | BUG-02 | PAYLOAD_SAMPLE=64 (увеличение ломает парсинг) |
 | BUG-17 | LONG_DOMAIN(60) не работает (следствие 64B) |
 | BUG-01 | IP header 20B hardcoded (IP options не учитываются) |
+| BUG-33 | DNS payload offset 28 (IPv4 only); IPv6 query → `<unparseable>`; не проверяется возврат bpf_skb_load_bytes |
 
 ### Открытые issues
 
@@ -243,9 +244,11 @@ ServiceMonitor for Prometheus Operator.
 
 ## 8. Следующие шаги
 
-1. **Валидация TP/FP** — тестовый стенд с iodine/dnscat2/dns2tcp, confusion matrix, Precision/Recall/F1 (основа экспериментальной части ВКР)
-2. Сравнение с Tetragon/Falco/Zeek
-3. (Опционально) ML scorer как отдельный Deployment
+1. **Валидация TP/FP** — iodine проведён (Фаза B); dnscat2, DNSExfiltrator; таблица метрик + интерпретация артефактов (см. docs/VALIDATION_FINDINGS.md)
+2. **Метрики:** опция analyze.py — ground truth по домену или исключение транзитных подов (CoreDNS) для корректного Precision/FPR
+3. **eBPF:** проверка возврата load_bytes; опционально IPv6 (offset 48) — снижение unparseable
+4. Сравнение с Tetragon/Falco/Zeek
+5. (Опционально) ML scorer как отдельный Deployment
 
 ---
 
