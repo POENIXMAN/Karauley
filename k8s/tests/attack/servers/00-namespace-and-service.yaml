@@ -5,19 +5,67 @@ metadata:
   labels:
     purpose: dns-tunnel-server
 ---
-# Единый сервис для всех серверов-инструментов.
-# Лейбл app=attack-server используется во всех server deployments.
-# В один момент запущен только один deployment — сервис направляет на него.
+# Отдельный сервис на каждый инструмент — все три сервера могут работать одновременно.
+# CoreDNS форвардит: t.attack.test → iodine-dns, c2.attack.test → dnscat2-dns, exfil.attack.test → exfil-dns.
+---
 apiVersion: v1
 kind: Service
 metadata:
-  name: tunnel-dns
+  name: iodine-dns
   namespace: attack-server
   labels:
     app: attack-server
+    tool: iodine
 spec:
   selector:
     app: attack-server
+    tool: iodine
+  ports:
+    - name: dns-udp
+      protocol: UDP
+      port: 53
+      targetPort: 53
+    - name: dns-tcp
+      protocol: TCP
+      port: 53
+      targetPort: 53
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dnscat2-dns
+  namespace: attack-server
+  labels:
+    app: attack-server
+    tool: dnscat2
+spec:
+  selector:
+    app: attack-server
+    tool: dnscat2
+  ports:
+    - name: dns-udp
+      protocol: UDP
+      port: 53
+      targetPort: 53
+    - name: dns-tcp
+      protocol: TCP
+      port: 53
+      targetPort: 53
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: exfil-dns
+  namespace: attack-server
+  labels:
+    app: attack-server
+    tool: dnsexfiltrator
+spec:
+  selector:
+    app: attack-server
+    tool: dnsexfiltrator
   ports:
     - name: dns-udp
       protocol: UDP

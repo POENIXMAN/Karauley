@@ -1,15 +1,16 @@
 #!/bin/bash
 #
 # Деплой серверов attack-инструментов внутри кластера (namespace attack-server).
-# Все серверы используют один Service (tunnel-dns) — запускайте один за раз.
+# Три отдельных сервиса (iodine-dns, dnscat2-dns, exfil-dns) — все серверы могут работать одновременно.
 #
 # Использование:
-#   ./deploy.sh setup         # создать namespace + service + настроить CoreDNS
-#   ./deploy.sh iodine        # запустить iodine server
-#   ./deploy.sh dnscat2       # запустить dnscat2 server
-#   ./deploy.sh exfil         # запустить DNS exfil receiver
-#   ./deploy.sh stop          # остановить все серверы (service остаётся)
-#   ./deploy.sh cleanup       # удалить всё (namespace, service, CoreDNS patch)
+#   ./deploy.sh setup         # создать namespace + 3 service, показать CoreDNS
+#   ./deploy.sh all           # запустить все три сервера (Phase C)
+#   ./deploy.sh iodine        # только iodine server (остальные не трогает)
+#   ./deploy.sh dnscat2       # только dnscat2 server
+#   ./deploy.sh exfil         # только exfil receiver
+#   ./deploy.sh stop          # остановить все серверы
+#   ./deploy.sh cleanup       # удалить всё
 #   ./deploy.sh status        # статус
 #
 set -euo pipefail
@@ -25,23 +26,30 @@ stop_all_servers() {
 
 show_coredns_instructions() {
   echo ""
-  echo "=== CoreDNS: настройка форварда ==="
+  echo "=== CoreDNS: настройка форварда (три зоны) ==="
   echo ""
-  SVC_IP=$(kubectl get svc tunnel-dns -n "$NS" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "<pending>")
-  echo "ClusterIP сервиса tunnel-dns: ${SVC_IP}"
+  IP_IODINE=$(kubectl get svc iodine-dns -n "$NS" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "<pending>")
+  IP_DNSCAT=$(kubectl get svc dnscat2-dns -n "$NS" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "<pending>")
+  IP_EXFIL=$(kubectl get svc exfil-dns -n "$NS" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo "<pending>")
+  echo "ClusterIP: iodine-dns=${IP_IODINE}  dnscat2-dns=${IP_DNSCAT}  exfil-dns=${IP_EXFIL}"
   echo ""
-  echo "Выполните:"
-  echo "  kubectl edit configmap coredns -n kube-system"
+  echo "Выполните: kubectl edit configmap coredns -n kube-system"
+  echo "В Corefile добавьте ПЕРЕД блоком .:53 три блока:"
   echo ""
-  echo "В Corefile добавьте ПЕРЕД блоком .:53 :"
-  echo ""
-  echo "    attack.test:53 {"
-  echo "        forward . ${SVC_IP}"
+  echo "    t.attack.test:53 {"
+  echo "        forward . ${IP_IODINE}"
+  echo "        log"
+  echo "    }"
+  echo "    c2.attack.test:53 {"
+  echo "        forward . ${IP_DNSCAT}"
+  echo "        log"
+  echo "    }"
+  echo "    exfil.attack.test:53 {"
+  echo "        forward . ${IP_EXFIL}"
   echo "        log"
   echo "    }"
   echo ""
-  echo "Сохраните, затем:"
-  echo "  kubectl rollout restart deployment coredns -n kube-system"
+  echo "Сохраните, затем: kubectl rollout restart deployment coredns -n kube-system"
   echo ""
 }
 
@@ -57,8 +65,6 @@ case "${1:-}" in
     ;;
 
   iodine)
-    echo "=== Stopping any running servers ==="
-    stop_all_servers
     echo "=== Deploying iodine server ==="
     kubectl apply -f "${SCRIPT_DIR}/01-iodine-server.yaml"
     echo ""
@@ -73,8 +79,6 @@ case "${1:-}" in
     ;;
 
   dnscat2)
-    echo "=== Stopping any running servers ==="
-    stop_all_servers
     echo "=== Deploying dnscat2 server ==="
     kubectl apply -f "${SCRIPT_DIR}/02-dnscat2-server.yaml"
     echo ""
@@ -89,8 +93,6 @@ case "${1:-}" in
     ;;
 
   exfil)
-    echo "=== Stopping any running servers ==="
-    stop_all_servers
     echo "=== Deploying DNS exfil receiver ==="
     kubectl apply -f "${SCRIPT_DIR}/03-exfil-receiver.yaml"
     echo ""
@@ -104,10 +106,20 @@ case "${1:-}" in
     echo "     kubectl rollout restart deployment/dnsexfiltrator-client -n attack"
     ;;
 
+  all)
+    echo "=== Deploying all three servers (Phase C) ==="
+    kubectl apply -f "${SCRIPT_DIR}/01-iodine-server.yaml"
+    kubectl apply -f "${SCRIPT_DIR}/02-dnscat2-server.yaml"
+    kubectl apply -f "${SCRIPT_DIR}/03-exfil-receiver.yaml"
+    echo ""
+    echo "All servers deploying. Wait for pods: kubectl get pods -n $NS -w"
+    echo "Then deploy clients from attack/ and run collect.sh for Phase C."
+    ;;
+
   stop)
     echo "=== Stopping all servers ==="
     stop_all_servers
-    echo "Done. Service and namespace preserved."
+    echo "Done. Services and namespace preserved."
     ;;
 
   cleanup)
@@ -115,15 +127,15 @@ case "${1:-}" in
     stop_all_servers
     kubectl delete -f "${SCRIPT_DIR}/00-namespace-and-service.yaml" --ignore-not-found 2>/dev/null || true
     echo ""
-    echo "Don't forget to remove the attack.test zone from CoreDNS:"
+    echo "Don't forget to remove the three attack.test zones from CoreDNS:"
     echo "  kubectl edit configmap coredns -n kube-system"
-    echo "  (remove the attack.test:53 block)"
+    echo "  (remove t.attack.test:53, c2.attack.test:53, exfil.attack.test:53 blocks)"
     echo "  kubectl rollout restart deployment coredns -n kube-system"
     ;;
 
   status)
-    echo "=== Service ==="
-    kubectl get svc -n "$NS" 2>/dev/null || echo "No service found"
+    echo "=== Services ==="
+    kubectl get svc -n "$NS" 2>/dev/null || echo "No services found"
     echo ""
     echo "=== Pods ==="
     kubectl get pods -n "$NS" -o wide 2>/dev/null || echo "No pods found"
@@ -136,15 +148,16 @@ case "${1:-}" in
     ;;
 
   *)
-    echo "Usage: $0 {setup|iodine|dnscat2|exfil|stop|cleanup|status}"
+    echo "Usage: $0 {setup|iodine|dnscat2|exfil|all|stop|cleanup|status}"
     echo ""
-    echo "  setup    — create namespace + service, show CoreDNS instructions"
-    echo "  iodine   — deploy iodine server (stops others first)"
-    echo "  dnscat2  — deploy dnscat2 server (stops others first)"
-    echo "  exfil    — deploy DNS exfil receiver (stops others first)"
-    echo "  stop     — stop all servers (keep namespace/service)"
+    echo "  setup    — create namespace + 3 services, show CoreDNS instructions"
+    echo "  iodine   — deploy iodine server only"
+    echo "  dnscat2  — deploy dnscat2 server only"
+    echo "  exfil    — deploy DNS exfil receiver only"
+    echo "  all      — deploy all three servers at once (Phase C)"
+    echo "  stop     — stop all servers (keep namespace/services)"
     echo "  cleanup  — remove everything"
-    echo "  status   — show pods, service, logs"
+    echo "  status   — show pods, services, logs"
     exit 1
     ;;
 esac
