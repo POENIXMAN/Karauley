@@ -80,6 +80,15 @@ spec:
         app: attack-traffic
         tool: dnsexfiltrator
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: attack-traffic
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: exfil
           image: python:3.11-alpine

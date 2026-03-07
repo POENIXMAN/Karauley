@@ -24,6 +24,15 @@ spec:
         app: attack-traffic
         tool: dnscat2
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: attack-traffic
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: dnscat2
           image: alpine:3.19

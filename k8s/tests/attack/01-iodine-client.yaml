@@ -26,6 +26,16 @@ spec:
         app: attack-traffic
         tool: iodine
     spec:
+      # Распределить клиентов по разным нодам (iodine, dnscat2, exfil — каждый на своей)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: attack-traffic
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: iodine
           image: alpine:3.19
