@@ -50,7 +50,8 @@ spec:
                 sleep 15
               done
               echo "Starting dnscat2 server for domain: c2.attack.test"
-              exec ruby ./dnscat2.rb c2.attack.test
+              # Keep stdin open so the interactive server does not exit (Input thread is over / EOF)
+              tail -f /dev/null | ruby ./dnscat2.rb c2.attack.test
           ports:
             - containerPort: 53
               protocol: UDP
