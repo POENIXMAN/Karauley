@@ -24,21 +24,33 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
+              set -e
               echo "Waiting for DNS..."
-              sleep 15
+              sleep 10
               for i in 1 2 3 4 5; do
-                apk add --no-cache build-base && break
-                echo "apk failed (attempt $i/5), retrying in 20s..."
-                sleep 20
+                apk add --no-cache build-base git && break
+                echo "apk failed (attempt $i/5), retrying in 15s..."
+                sleep 15
               done
               for i in 1 2 3 4 5; do
-                gem install dnscat2 && break
-                echo "gem install failed (attempt $i/5), retrying in 20s..."
-                sleep 20
+                gem install bundler && break
+                echo "gem install bundler failed (attempt $i/5), retrying in 15s..."
+                sleep 15
               done
-              command -v dnscat2 >/dev/null 2>&1 || { echo "FATAL: dnscat2 not installed"; sleep 3600; exit 1; }
+              for i in 1 2 3 4 5; do
+                git clone --depth 1 https://github.com/iagox86/dnscat2.git && break
+                echo "git clone failed (attempt $i/5), retrying in 15s..."
+                sleep 15
+                rm -rf dnscat2
+              done
+              cd dnscat2/server
+              for i in 1 2 3 4 5; do
+                bundle install && break
+                echo "bundle install failed (attempt $i/5), retrying in 15s..."
+                sleep 15
+              done
               echo "Starting dnscat2 server for domain: c2.attack.test"
-              exec dnscat2 c2.attack.test
+              exec ruby ./dnscat2.rb c2.attack.test
           ports:
             - containerPort: 53
               protocol: UDP
