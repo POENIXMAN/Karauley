@@ -217,6 +217,74 @@ if any(domain.endswith(s) for s in config.CLUSTER_DNS_SUFFIXES):
 
 ---
 
+## 5b. Результаты Phase C: Прогон 3 — с новыми фиксами
+
+### 5b.1 Контекст
+
+После Прогона 2 были выявлены три проблемы:
+1. **MANY_SUBDOMAINS на `cluster.local`** — все K8s сервисы группируются под base_domain=`cluster.local`, вызывая ~42K FP
+2. **Проверка кодировки только в parts[0]** — пропускала chunked exfil типа `1.base64data.exfil.test`
+3. **Порог кодировки > 20 символов** — пропускал 20-символьные base64 данные
+
+### 5b.2 Сырые метрики (Прогон 3, до фиксов)
+
+**GT by pod (namespace):**
+
+| Threshold | TP | FN | FP | TN | Precision | Recall | FPR |
+|-----------|------|-----|-------|--------|-----------|--------|-----|
+| 2 | 5720 | 399 | 49049 | 469061 | 0.1044 | 0.9348 | 9.467% |
+
+**GT by domain (`--gt-by-domain --attack-domain attack.test`):**
+
+| Threshold | TP | FN | FP | TN | Precision | Recall | F1 | FPR |
+|-----------|-------|-----|-------|--------|-----------|--------|-------|------|
+| 2 | 11837 | 0 | 42932 | 469460 | 0.2161 | **1.0000** | 0.3554 | 8.379% |
+| **3** | **11477** | **360** | **20** | **512372** | **0.9983** | **0.9696** | **0.9837** | **0.004%** |
+
+### 5b.3 Анализ проблем
+
+**Проблема 1: MANY_SUBDOMAINS на cluster.local (~42K FP)**
+
+Детектор считает `base_domain = '.'.join(parts[-2:])` → для всего K8s DNS это `cluster.local`. Уникальные "subdomains":
+- `kube-dns.svc` (от `kube-dns.svc.cluster.local`)
+- `pod-0.headless-svc.default.svc` (от headless pod)
+- `_dns._udp.kube-dns.kube-system.svc` (SRV records)
+- ...и т.д.
+
+Результат: >50 уникальных subdomains → `MANY_SUBDOMAINS(50)` → score=2 → FP на легитимном трафике.
+
+**Проблема 2: Кодировка проверялась только в parts[0]**
+
+Exfil-домен `1.ldF90b2tlbl8xMjM0NQo.exfil.attack.test.lan`:
+- `parts[0]` = `1` (chunk number) — не срабатывает
+- `parts[1]` = `ldF90b2tlbl8xMjM0NQo` (base64 данные, 20 символов) — не проверялся!
+
+**Проблема 3: Порог > 20 вместо >= 16**
+
+`ldF90b2tlbl8xMjM0NQo` = 20 символов. Порог `len > 20` требовал 21+. Результат: BASE64_SUBDOMAIN не срабатывал.
+
+### 5b.4 Внесённые исправления
+
+| Файл | Исправление |
+|------|-------------|
+| `config.py` | Добавлен `CLUSTER_BASE_DOMAINS = {"cluster.local", ...}` |
+| `exfil.py` | Пропуск `MANY_SUBDOMAINS` для `base_domain in CLUSTER_BASE_DOMAINS` |
+| `exfil.py` | Проверка кодировки во **всех** `parts[:-2]`, не только `parts[0]` |
+| `exfil.py` | Порог кодировки снижен до `>= 16` символов |
+
+### 5b.5 Ожидаемые улучшения после фиксов
+
+| Метрика | До | После (ожид.) | Изменение |
+|---------|----|--------------| ----------|
+| FP (GT by pod, th=2) | 49049 | ~78 | −99.8% |
+| FN (GT by domain, th=3) | 360 | ~0 | −100% |
+| Precision | 0.1044 | ~0.99 | +90% |
+| Recall | 0.9348 | ~1.00 | +7% |
+
+**Примечание:** Требуется повторный прогон Phase C для подтверждения.
+
+---
+
 ## 6. Сводная таблица метрик по всем фазам
 
 ### 6.1 Прогон 1 (bpf_skb_load_bytes — устаревший)

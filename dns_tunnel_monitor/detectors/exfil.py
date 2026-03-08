@@ -3,6 +3,7 @@ import re
 from collections import defaultdict
 
 from dns_tunnel_monitor.dns_parsing import calculate_entropy
+from dns_tunnel_monitor import config
 
 
 class ExfiltrationDetector:
@@ -35,23 +36,30 @@ class ExfiltrationDetector:
 
         parts = domain.split('.')
         if len(parts) > 2:
-            first_subdomain = parts[0]
-            if len(first_subdomain) > 20:
-                # Проверяем hex первым: hex-символы — подмножество base64, иначе HEX_SUBDOMAIN никогда не сработает (BUG-14)
-                if re.match(r'^[0-9a-fA-F]+$', first_subdomain):
-                    reasons.append("HEX_SUBDOMAIN")
-                elif re.match(r'^[A-Za-z0-9+/=]+$', first_subdomain):
-                    reasons.append("BASE64_SUBDOMAIN")
+            # Проверяем ВСЕ поддомены на кодировку (экфильтрация: 1.base64data.exfil.test → chunk в parts[0], данные в parts[1])
+            # Порог 16 символов — минимальный размер осмысленных base64/hex данных (12 байт)
+            # Останавливаемся на первом совпадении (достаточно одного закодированного поддомена)
+            for subdomain in parts[:-2]:  # все кроме base_domain
+                if len(subdomain) >= 16:
+                    if re.match(r'^[0-9a-fA-F]+$', subdomain):
+                        reasons.append("HEX_SUBDOMAIN")
+                        break
+                    elif re.match(r'^[A-Za-z0-9+/=]+$', subdomain):
+                        reasons.append("BASE64_SUBDOMAIN")
+                        break
 
         if len(parts) >= 2:
             base_domain = '.'.join(parts[-2:])
-            subdomain = '.'.join(parts[:-2])
-            lst = self.subdomain_counts[base_domain]
-            if subdomain not in lst:
-                lst.append(subdomain)
-                if len(lst) > self.MAX_SUBDOMAINS_STORED:
-                    lst.pop(0)
-            if len(lst) > self.SUBDOMAIN_COUNT_THRESHOLD:
-                reasons.append(f"MANY_SUBDOMAINS({len(lst)})")
+            # Пропускаем MANY_SUBDOMAINS для K8s cluster DNS (cluster.local, svc.cluster.local)
+            # иначе все K8s сервисы группируются под cluster.local и ложно срабатывают
+            if base_domain not in config.CLUSTER_BASE_DOMAINS:
+                subdomain = '.'.join(parts[:-2])
+                lst = self.subdomain_counts[base_domain]
+                if subdomain not in lst:
+                    lst.append(subdomain)
+                    if len(lst) > self.MAX_SUBDOMAINS_STORED:
+                        lst.pop(0)
+                if len(lst) > self.SUBDOMAIN_COUNT_THRESHOLD:
+                    reasons.append(f"MANY_SUBDOMAINS({len(lst)})")
 
         return len(reasons) > 0, reasons
