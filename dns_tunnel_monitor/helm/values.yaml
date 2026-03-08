@@ -76,6 +76,8 @@ env:
   METRICS_PORT: "9999"
   # Set to "1" to log why cgroup_id -> pod name resolution fails (stderr); then check pod logs.
   DEBUG_POD_RESOLVER: "1"
+  # Set to "1" to log each <unparseable> event (ip_version, payload hex) to stderr; for diagnostics.
+  DEBUG_UNPARSEABLE: ""
 
 # TXT whitelist from file — без пересборки образа. UTF-8 (русские/китайские домены).
 # Включить и смонтировать ConfigMap с файлом txt_whitelist.txt.

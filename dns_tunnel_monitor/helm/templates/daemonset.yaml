@@ -53,6 +53,10 @@ spec:
             - name: DEBUG_POD_RESOLVER
               value: {{ .Values.env.DEBUG_POD_RESOLVER | quote }}
             {{- end }}
+            {{- if .Values.env.DEBUG_UNPARSEABLE }}
+            - name: DEBUG_UNPARSEABLE
+              value: {{ .Values.env.DEBUG_UNPARSEABLE | quote }}
+            {{- end }}
             {{- if .Values.txtWhitelist.enabled }}
             - name: TXT_WHITELIST_FILE
               value: "/config/whitelist/txt_whitelist.txt"

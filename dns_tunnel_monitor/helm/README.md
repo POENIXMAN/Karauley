@@ -17,6 +17,8 @@ helm install dns-tunnel-monitor ./dns_tunnel_monitor/helm -n default
 | image.tag | Image tag | v1 |
 | env.CGROUP_PATH | Host cgroup mount path in container | /host-cgroup |
 | env.METRICS_PORT | HTTP port for /metrics | 9999 |
+| env.DEBUG_POD_RESOLVER | Log cgroup_id→pod resolution failures (set to "1") | "1" |
+| env.DEBUG_UNPARSEABLE | Log each \<unparseable\> event to stderr (set to "1") | "" |
 | prometheus.enabled | Add Prometheus scrape annotations | true |
 
 ## Build image
