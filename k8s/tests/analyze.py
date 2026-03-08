@@ -7,6 +7,7 @@
     python analyze.py results/attack_iodine.jsonl                # Фаза B
     python analyze.py results/mixed_iodine.jsonl                 # Фаза C
     python analyze.py results/mixed_iodine.jsonl --threshold 3   # Пересчёт с другим порогом
+    python analyze.py results/phase_C.jsonl --gt-by-domain       # GT по домену (*.attack.test → attack), убирает артефакт CoreDNS
     python analyze.py results/*.jsonl --summary                  # Сводная таблица по всем файлам
 """
 
@@ -18,7 +19,24 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 
-def classify_pod(pod_name, attack_namespace="attack"):
+def _is_attack_domain(domain, attack_domain_suffix="attack.test"):
+    """True если домен — атакующий (например *.attack.test или *.*.attack.test.lan)."""
+    if not domain or domain.startswith("<") or not isinstance(domain, str):
+        return False
+    d = domain.lower()
+    suffix = attack_domain_suffix.lower()
+    if d == suffix:
+        return True
+    if d.endswith("." + suffix):
+        return True
+    if "." + suffix + "." in d:
+        return True
+    if d.endswith("." + suffix + ".lan"):
+        return True
+    return False
+
+
+def classify_by_pod(pod_name, attack_namespace="attack"):
     """Определяет ground-truth label по namespace пода."""
     if not pod_name or pod_name == "unknown":
         return "unknown"
@@ -36,7 +54,27 @@ def classify_pod(pod_name, attack_namespace="attack"):
     return "legit"
 
 
-def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None):
+def classify_event(pod_name, domain, gt_by_domain=False, attack_namespace="attack", attack_domain_suffix="attack.test"):
+    """
+    Ground-truth label: по поду (default) или по домену (--gt-by-domain).
+    При gt_by_domain: домены *.attack.test и т.п. → attack; иначе fallback на под.
+    """
+    if gt_by_domain and domain:
+        if _is_attack_domain(domain, attack_domain_suffix):
+            # Уточняем tool по домену если возможно
+            d = domain.lower()
+            if "exfil" in d or "dnsexfil" in d:
+                return "attack:exfil"
+            if "c2." in d or "dnscat" in d:
+                return "attack:dnscat"
+            if "t." in d and "attack.test" in d:  # iodine t.attack.test
+                return "attack:iodine"
+            return "attack:unknown"
+        return "legit"
+    return classify_by_pod(pod_name, attack_namespace)
+
+
+def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt_by_domain=False, attack_domain_suffix="attack.test"):
     """Парсит JSONL и строит confusion matrix."""
     tp = fp = fn = tn = 0
     fp_domains = Counter()
@@ -74,7 +112,7 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None):
             else:
                 is_suspicious = ev.get("suspicious", False)
 
-            label = classify_pod(pod, attack_namespace)
+            label = classify_event(pod, domain, gt_by_domain=gt_by_domain, attack_namespace=attack_namespace, attack_domain_suffix=attack_domain_suffix)
             is_attack = label.startswith("attack:")
 
             if is_attack:
@@ -122,6 +160,8 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None):
         "file": str(jsonl_path),
         "events_total": events_total,
         "parse_errors": parse_errors,
+        "gt_by_domain": gt_by_domain,
+        "attack_domain_suffix": attack_domain_suffix,
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
         "precision": precision,
         "recall": recall,
@@ -147,9 +187,10 @@ def print_report(result):
     f = result
     name = os.path.basename(f["file"])
     threshold_info = f" (пересчёт с threshold={f['score_threshold']})" if f["score_threshold"] else ""
+    gt_info = f" [GT по домену: *.{f.get('attack_domain_suffix', 'attack.test')}]" if f.get("gt_by_domain") else ""
 
     print(f"\n{'='*70}")
-    print(f"  {name}{threshold_info}")
+    print(f"  {name}{threshold_info}{gt_info}")
     print(f"{'='*70}")
     print(f"  Events: {f['events_total']}  (parse errors: {f['parse_errors']})")
     print()
@@ -234,6 +275,10 @@ def main():
                         help="Пересчитать с другим score threshold (по умолчанию — из лога)")
     parser.add_argument("--attack-ns", default="attack",
                         help="Namespace атакующих подов (default: attack)")
+    parser.add_argument("--gt-by-domain", action="store_true",
+                        help="Ground truth по домену: *.attack.test → attack (убирает артефакт CoreDNS FP)")
+    parser.add_argument("--attack-domain", default="attack.test",
+                        help="Суффикс атакующего домена при --gt-by-domain (default: attack.test)")
     parser.add_argument("--summary", action="store_true",
                         help="Вывести только сводную таблицу")
     parser.add_argument("--save", action="store_true",
@@ -245,7 +290,7 @@ def main():
         if not os.path.exists(fpath):
             print(f"WARNING: file not found: {fpath}", file=sys.stderr)
             continue
-        result = analyze_file(fpath, args.attack_ns, args.threshold)
+        result = analyze_file(fpath, args.attack_ns, args.threshold, gt_by_domain=args.gt_by_domain, attack_domain_suffix=args.attack_domain)
         results.append(result)
         if not args.summary:
             print_report(result)

@@ -1,5 +1,6 @@
 """Config: CGROUP_PATH, METRICS_PORT, BPF path, colors."""
 import os
+import re
 
 _here = os.path.dirname(os.path.abspath(__file__))
 BPF_SOURCE_FILE = os.path.join(_here, "bpf", "dns_cgroup.bpf.c")
@@ -23,6 +24,29 @@ CLUSTER_DNS_SUFFIXES = [
 ]
 if not CLUSTER_DNS_SUFFIXES:
     CLUSTER_DNS_SUFFIXES = [".svc.cluster.local", ".cluster.local", ".pod.cluster.local"]
+
+# Строгие паттерны для легитимного K8s DNS (убирает FN из ndots expansion).
+# Только <service>.<namespace>.svc.cluster.local, не exfil.attack.test.svc.cluster.local.
+_K8S_SVC_RE = re.compile(r"^[a-z0-9\-]+\.[a-z0-9\-]+\.svc\.cluster\.local$")
+_K8S_POD_RE = re.compile(r"^[a-z0-9\-]+\.[a-z0-9\-]+\.pod\.cluster\.local$")
+_K8S_CLUSTER_RE = re.compile(r"^[a-z0-9\-]+\.cluster\.local$")
+
+
+def is_legitimate_cluster_dns(domain):
+    """
+    True только для легитимных K8s service/pod имён, не для атакующих доменов
+    с приписанным суффиксом (ndots expansion: exfil.attack.test.svc.cluster.local).
+    """
+    if not domain or not isinstance(domain, str):
+        return False
+    domain = domain.lower().strip()
+    if _K8S_SVC_RE.match(domain):
+        return True
+    if _K8S_POD_RE.match(domain):
+        return True
+    if _K8S_CLUSTER_RE.match(domain):
+        return True
+    return False
 
 # Диагностика <unparseable>: при 1 в stderr пишется ip_version и hex первых 12 байт payload.
 DEBUG_UNPARSEABLE = os.environ.get(ENV_DEBUG_UNPARSEABLE, "").strip().lower() in ("1", "true", "yes")

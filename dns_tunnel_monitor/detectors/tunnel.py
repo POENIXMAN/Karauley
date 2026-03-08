@@ -45,8 +45,9 @@ class TunnelDetector:
         if not domain or domain.startswith("<"):
             return False, None, [], 0
 
-        # K8S: не детектируем cluster-internal DNS (ложные срабатывания на service discovery)
-        if any(domain.endswith(s) for s in config.CLUSTER_DNS_SUFFIXES):
+        # K8S: не детектируем только легитимный cluster DNS (строгий паттерн),
+        # не exfil.attack.test.svc.cluster.local из ndots expansion (VALIDATION_FINDINGS 5.4)
+        if config.is_legitimate_cluster_dns(domain):
             return False, None, [], 0
 
         all_reasons = []

@@ -28,9 +28,15 @@
 
 | Приоритет | Задача | Статус |
 |-----------|--------|--------|
-| **1** | **Валидация TP/FP** — iodine проведён; dnscat2, DNSExfiltrator (Фаза B/C), таблица метрик для ВКР | **В работе** |
-| 2 | **Артефакты метрик:** analyze.py — опция GT по домену (`.attack.test`) или исключение транзитных подов (CoreDNS) | Рекомендовано (см. VALIDATION_FINDINGS.md) |
-| 3 | **eBPF:** используется прямой доступ (ctx->data/data_end), одна bounds check; осталось: поддержка IPv6 (offset 48 для DNS payload) | Рекомендовано (снижает unparseable) |
+| **1** | **Фикс CLUSTER_DNS_SUFFIXES whitelist** — regex `^<svc>.<ns>.svc.cluster.local$`, убрать 400 FN из ndots expansion | **Следующий** |
+| **2** | **analyze.py `--gt-by-domain`** — `*.attack.test` → attack; Precision Phase C → ~0.99 | **Следующий** |
+| 3 | **Phase B повтор** — iodine/dnscat2/exfil изолированно после BPF-правки; таблица метрик для ВКР | В плане |
+| 4 | **eBPF: IPv6** — offset 48 для DNS payload; устранит ~399 оставшихся unparseable | Рекомендовано |
+| 5 | Конфигурируемые пороги детекторов (config/env) | В плане |
+| 6 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
+| 7 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |
+| 8 | Юнит-тесты для exfil, парсинга; расширение test_timestamp_detection | В плане |
+| 9 | Сравнение с Tetragon/Falco/Zeek (overhead, coverage) | Для ВКР |
 | 4 | Конфигурируемые пороги детекторов (config/env) | В плане |
 | 5 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
 | 6 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |

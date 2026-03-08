@@ -1,6 +1,6 @@
-# DNS Tunnel Monitor — Полный контекст проекта (v2)
+# DNS Tunnel Monitor — Полный контекст проекта (v3)
 
-Этот документ — self-contained контекст для LLM. Обновлён 2026-03-01 после исправлений.
+Этот документ — self-contained контекст для LLM. Обновлён 2026-03 после Phase C (direct access BPF), фикса whitelist и analyze.py --gt-by-domain.
 
 ---
 
@@ -13,7 +13,7 @@
 - **Только UDP/IPv4 DNS** (порт 53), payload 64 байта (~45 символов домена)
 - DaemonSet с Prometheus-метриками
 
-**Готовность: ~80%.** Сквозной pipeline работает. 10 из 11 детекторных проверок работают. Валидация начата: iodine (Фаза B) — по распарсенным ответам детекция 100%, latency 0.01 с; сырые метрики занижены артефактами (см. VALIDATION_FINDINGS.md).
+**Готовность: ~85%.** Pipeline работает. Валидация Phase C (direct access BPF): **Recall 0.856, F1 0.613** (threshold=2); Real FPR ≈ 0.017%. Добавлены: строгий whitelist cluster DNS (убирает ~400 FN из ndots), analyze.py `--gt-by-domain` (Precision → ~0.99 при разметке по домену). Подробности: VALIDATION_FINDINGS.md, HONEST_ASSESSMENT.md.
 
 ---
 
@@ -36,23 +36,30 @@ Pod DNS traffic (UDP/53)
 
 ```
 dns_tunnel_monitor/
-├── bpf/dns_cgroup.bpf.c     # BPF: cgroup_skb hooks, capture direction+cgroup_id+64B
-├── event_struct.py            # ctypes struct (80 bytes)
-├── loader.py                  # load BPF, attach, perf callback, normalize event
+├── bpf/dns_cgroup.bpf.c     # BPF: cgroup_skb, direct access (data/data_end), 64B+ip_version
+├── event_struct.py            # ctypes struct (81 bytes: +ip_version)
+├── loader.py                  # load BPF, attach, perf callback; unparseable → payload_sample_hex
 ├── dns_parsing.py             # parse_dns_name, parse_dns_type, calculate_entropy
-├── config.py                  # env vars, cluster DNS suffixes, cache TTL, colors
+├── config.py                  # env, is_legitimate_cluster_dns() (strict regex), TTL, colors
 ├── pod_resolver.py            # cgroup_id → ns/pod via BPF fd / cgroup walk / K8s API
-├── event_handler.py           # stats + detectors + metrics + console log
+├── event_handler.py           # stats + detectors + metrics + JSON stderr; DEBUG_UNPARSEABLE
 ├── detectors/
-│   ├── tunnel.py              # scoring aggregator + cluster DNS whitelist
+│   ├── tunnel.py              # scoring + strict cluster DNS whitelist (not endswith)
 │   ├── c2.py                  # beacon CV + TXT heuristic (LRU 10K keys)
 │   ├── exfil.py               # entropy/digit/hex/base64/subdomains (capped 50)
-│   └── ip_over_dns.py         # per-key rate + NULL + answers
-├── metrics.py                 # Flask + Prometheus counters/gauges
+│   └── ip_over_dns.py         # _key_data OrderedDict LRU, per-key rate + NULL + answers
+├── metrics.py                 # Flask + Prometheus
 ├── main.py                    # entry point, signal handling
 ├── helm/                      # Helm chart (DaemonSet, RBAC, ServiceMonitor)
 ├── Dockerfile                 # python:3.11-slim + bpfcc-tools
-└── requirements.txt           # prometheus_client, flask
+└── requirements.txt          # prometheus_client, flask
+
+k8s/tests/
+├── analyze.py                 # confusion matrix; --gt-by-domain, --attack-domain, --threshold
+├── collect.sh                 # сбор JSONL из DaemonSet
+docs/
+├── VALIDATION_FINDINGS.md     # Phase A/B/C результаты, интерпретация FP/FN
+├── UNPARSEABLE_DIAGNOSTICS.md # ip_version, payload_sample_hex, DEBUG_UNPARSEABLE=1
 ```
 
 ---
@@ -61,36 +68,19 @@ dns_tunnel_monitor/
 
 ### 4.1 BPF — `bpf/dns_cgroup.bpf.c`
 
-```c
-#define DNS_PORT 53
-#define PAYLOAD_SAMPLE 64
+- **Доступ к пакету:** прямой (ctx->data / data_end), одна проверка `data + 92 <= data_end`. Без bpf_skb_load_bytes — меньше unparseable (Phase C: 399 вместо ~1719).
+- **Структура события:** direction, cgroup_id, payload[64], **ip_version** (верхние 4 бита первого байта пакета — для диагностики unparseable).
+- **Фильтр:** UDP, порт 53; payload с offset 28 (IPv4). IPv6 не поддерживается → оставшиеся unparseable.
 
-struct event_t {
-    uint8_t  direction;       // 1=egress, 2=ingress
-    uint8_t  _pad[7];
-    uint64_t cgroup_id;
-    uint8_t  payload[PAYLOAD_SAMPLE];
-};
-
-static __always_inline int monitor_dns(struct __sk_buff *ctx, uint8_t dir) {
-    // filter: UDP only, port 53
-    // capture: direction + cgroup_id + first 64 bytes of DNS payload (offset 28 = IP(20)+UDP(8))
-    // send via perf_submit
-}
-int egress_hook(struct __sk_buff *ctx)  { return monitor_dns(ctx, 1); }
-int ingress_hook(struct __sk_buff *ctx) { return monitor_dns(ctx, 2); }
-```
-
-Ограничения: hardcoded IP header 20 bytes (no IP options), UDP only, 64B payload. **Доступ к пакету — прямой** (ctx->data / data_end, одна проверка длины). DNS payload читается с offset 28 (IPv4). Для IPv6 (header 40B) DNS с offset 48 — текущий код читает с 28 → мусор/нули → `<unparseable>`. Query часто по IPv6 → много `<unparseable>`; response чаще парсятся (часто IPv4).
+Ограничения: UDP only, 64B payload, IPv4 only (offset 28). IPv6 даёт мусор с 28 → `<unparseable>`. Диагностика: DEBUG_UNPARSEABLE=1 и поля ip_version, payload_sample_hex в событии (см. UNPARSEABLE_DIAGNOSTICS.md).
 
 ### 4.2 Loader — `loader.py`
 
 ```python
-# In perf callback:
-is_response = (dns_flags & 0x8000) != 0          # QR bit (BUG-03 fixed)
-direction = "response" if is_response else "query"
-# Normalizes into dict with: domain, direction, protocol, client_pod, process,
-#   cgroup_id, dns_id, dns_flags, dns_answers, dns_type, timestamp_ns
+# In perf callback: ev.ip_version, ev.payload → domain, dns_id, dns_flags, ...
+# If domain == "<unparseable>": normalized["payload_sample_hex"] = payload[:12].hex()
+# Normalized dict: domain, direction, protocol, client_pod, process, cgroup_id,
+#   dns_id, dns_flags, dns_answers, dns_type, timestamp_ns, ip_version
 ```
 
 ### 4.3 Detectors
@@ -122,23 +112,18 @@ class ExfiltrationDetector:
 
 ```python
 class IPOverDNSDetector:
-    request_counts = defaultdict(int)   # per (cgroup_id, base_domain)
-    first_seen_ns = {}                  # per-key window start
-    # Per-key 10s window, rate > 50/sec → HIGH_RATE (weight 3)
-    # dns_type == 10 → NULL_RECORD (weight 2)
-    # dns_answers > 5 → MANY_ANSWERS (weight 2)
+    _key_data = OrderedDict()  # key -> (request_count, first_seen_ns), LRU 10K keys
+    # Per-key 10s window, rate > RATE_THRESHOLD → HIGH_RATE (weight 3)
+    # dns_type == 10 → NULL_RECORD (weight 2), dns_answers > 15 → MANY_ANSWERS (weight 2)
 ```
 
 #### Aggregator — `detectors/tunnel.py`
 
 ```python
-# 1. Skip cluster-internal DNS (.svc.cluster.local etc.) — configurable
+# 1. Skip only legitimate K8s DNS: config.is_legitimate_cluster_dns(domain)
+#    Strict regex: ^<svc>.<ns>.svc.cluster.local$ (не exfil.attack.test.svc...)
 # 2. Run all 3 detectors
-# 3. Score = sum of weights for triggered reasons
-# 4. Suspicious if score >= 2
-# Single C2_TXT_REQUEST (weight 1) → NOT suspicious
-# HIGH_ENTROPY alone (weight 2) → suspicious
-# C2_BEACON alone (weight 3) → suspicious
+# 3. Score = sum of weights; suspicious if score >= 2
 ```
 
 ### 4.4 Pod Resolver — `pod_resolver.py`
@@ -161,98 +146,51 @@ ServiceMonitor for Prometheus Operator.
 
 ---
 
-## 5. Нормализованное событие
+## 5. Нормализованное событие и JSON-лог
 
+**Нормализованное событие (в callback):**
 ```python
 {
-    "domain": "example.com",        # parsed (max ~45 chars due to 64B)
-    "direction": "query",           # by QR bit of DNS flags
+    "domain": "example.com",        # или "<unparseable>"
+    "direction": "query",           # по QR-биту DNS
     "protocol": "UDP",
-    "client_pod": "default/nginx",  # resolved via cgroup_id
-    "process": "nginx",             # from /proc/pid/comm
+    "client_pod": "default/nginx",
+    "process": "nginx",
     "cgroup_id": 12345,
     "dns_id": 0x1234, "dns_flags": 0x0100,
     "dns_answers": 0, "dns_type": 1,
-    "timestamp_ns": 1709312345000000000,
+    "timestamp_ns": ...,
+    "ip_version": 4,               # для диагностики unparseable
+    "payload_sample_hex": "...",    # только при domain == "<unparseable>"
 }
 ```
 
----
-
-## 6. Баги — текущий статус
-
-### Исправлено (11 fixes)
-
-| ID | Описание |
-|----|----------|
-| BUG-03 | direction по QR-биту вместо egress/ingress |
-| BUG-11 | query_history: OrderedDict LRU (10K keys) |
-| BUG-14 | hex regex перед base64 (оба работают) |
-| BUG-16 | subdomain_counts: list с cap 50 |
-| BUG-18 | Per-key window вместо global tumbling |
-| BUG-19 | Rate от per-key first_seen |
-| BUG-26 | PodResolver: TTL cache (300s) |
-| ISSUE-12 | TXT whitelist: 27 доменов + ACME |
-| ISSUE-22 | Scoring (weighted sum, threshold=2) |
-| K8S | Cluster DNS whitelist (configurable) |
-| NEW-01 | ip_over_dns: _key_data OrderedDict LRU (10K keys) |
-
-### Принятые ограничения
-
-| ID | Описание |
-|----|----------|
-| BUG-02 | PAYLOAD_SAMPLE=64 (увеличение ломает парсинг) |
-| BUG-17 | LONG_DOMAIN(60) не работает (следствие 64B) |
-| BUG-01 | IP header 20B hardcoded (IP options не учитываются) |
-| BUG-33 | DNS payload offset 28 (IPv4 only); IPv6 query → `<unparseable>`; прямой доступ к skb (bounds check есть) |
-
-### Открытые issues
-
-| ID | Severity | Описание |
-|----|----------|----------|
-| BUG-10 | Medium | base_domain = last 2 labels (неверно для .co.uk) |
-| BUG-15 | Medium | Энтропия по полному домену, не по поддомену |
-| BUG-23 | Medium | stats["domains"] set растёт бесконечно |
-| BUG-27 | Medium | K8s API limit=500, нет пагинации |
-| BUG-30 | Medium | Prometheus label cardinality (process × pod × direction) |
-| BUG-07 | Low | parse_dns_type: нет bounds check в while |
-| BUG-20 | Low | NULL_RECORD/MANY_ANSWERS double fire (query+response) |
-| BUG-32 | Low | Double print_stats при Ctrl+C |
-| ISSUE-33 | Medium | Нет мониторинга потерь perf buffer |
-
----
-
-## 7. Детекция — что работает при 64B payload
-
-| Проверка | Вес | Работает? |
-|----------|:---:|:---------:|
-| C2_BEACON (CV интервалов) | 3 | Да |
-| C2_TXT_REQUEST | 1 | Да |
-| HIGH_ENTROPY | 2 | Да |
-| HIGH_DIGIT_RATIO | 1 | Да |
-| HEX_SUBDOMAIN | 2 | Да |
-| BASE64_SUBDOMAIN | 2 | Да |
-| MANY_SUBDOMAINS | 2 | Да |
-| HIGH_RATE | 3 | Да |
-| NULL_RECORD | 2 | Да |
-| MANY_ANSWERS | 2 | Да |
-| LONG_DOMAIN | 1 | **Нет** |
-
-**10 из 11 работают. Scoring threshold = 2.**
+**Строка в stderr (JSON):** ts, domain, direction, dns_type, pod, process, suspicious, score, threat_type, reasons, ip_version; при unparseable — payload_sample_hex. Используется analyze.py и collect.sh.
 
 ---
 
 ## 8. Следующие шаги
 
-1. **Валидация TP/FP** — iodine проведён (Фаза B); dnscat2, DNSExfiltrator; таблица метрик + интерпретация артефактов (см. docs/VALIDATION_FINDINGS.md)
-2. **Метрики:** опция analyze.py — ground truth по домену или исключение транзитных подов (CoreDNS) для корректного Precision/FPR
-3. **eBPF:** проверка возврата load_bytes; опционально IPv6 (offset 48) — снижение unparseable
-4. Сравнение с Tetragon/Falco/Zeek
-5. (Опционально) ML scorer как отдельный Deployment
+1. **Сделано:** strict cluster DNS whitelist (is_legitimate_cluster_dns); analyze.py `--gt-by-domain` и `--attack-domain` для разметки по домену (Precision Phase C → ~0.99).
+2. **Валидация:** Phase C с direct access — Recall 0.856, F1 0.613; Real FPR ≈ 0.017%. Повтор Phase B (iodine/dnscat2/exfil изолированно) после правок — по желанию.
+3. **eBPF:** поддержка IPv6 (offset 48) — устранит ~399 оставшихся unparseable.
+4. Сравнение с Tetragon/Falco/Zeek для ВКР.
+5. (Опционально) ROC по threshold, повторные прогоны (mean ± std), ML scorer.
 
 ---
 
-## 9. Технологический стек
+## 9. Анализ логов (k8s/tests/analyze.py)
+
+- **По умолчанию:** ground truth по namespace пода (attack → attack, kube-system → legit). CoreDNS transit считается FP.
+- **`--gt-by-domain`:** ground truth по домену: `*.attack.test` и варианты → attack. Убирает артефакт CoreDNS, Precision → ~0.99.
+- **`--attack-domain SUFFIX`:** суффикс атакующего домена (default: attack.test).
+- **`--threshold N`:** пересчёт метрик с порогом score >= N.
+
+Пример: `python3 analyze.py results/phase_C.jsonl --gt-by-domain`
+
+---
+
+## 10. Технологический стек
 
 | Компонент | Технология |
 |-----------|------------|
