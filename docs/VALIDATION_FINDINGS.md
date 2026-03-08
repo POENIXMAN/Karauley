@@ -351,15 +351,18 @@ K8S_SVC_RE.match(domain)
 
 ---
 
-## 8. Рекомендации (обновлено после Прогона 2)
+## 8. Рекомендации (обновлено после Прогона 3)
 
 ### 8.1 Критично для корректных метрик в ВКР
 
-| Задача | Описание | Оценка | Приоритет |
-|--------|----------|--------|-----------|
-| Фикс CLUSTER_DNS_SUFFIXES whitelist | Regex-проверка `<svc>.<ns>.svc.cluster.local`, не просто endswith | 1–2 ч | **Высокий** |
-| analyze.py: `--gt-by-domain` | `*.attack.test` → attack; убрать CoreDNS artifact FP | 2–3 ч | **Высокий** |
-| Phase B повтор после BPF-правки | Прогнать iodine/dnscat2/exfil изолированно с direct access | 3–4 ч | Средний |
+| Задача | Описание | Оценка | Статус |
+|--------|----------|--------|--------|
+| Фикс CLUSTER_DNS_SUFFIXES whitelist | Regex-проверка `<svc>.<ns>.svc.cluster.local`, 1-4 метки | 1–2 ч | ✅ Готово |
+| Фикс MANY_SUBDOMAINS на cluster.local | Пропуск base_domain ∈ CLUSTER_BASE_DOMAINS | 0.5 ч | ✅ Готово |
+| Фикс проверки кодировки | Все поддомены, порог >= 16 | 0.5 ч | ✅ Готово |
+| analyze.py: `--gt-by-domain` | `*.attack.test` → attack; убрать CoreDNS artifact FP | 2–3 ч | ✅ Готово |
+| **Повторный прогон Phase C** | Подтвердить метрики после фиксов | 1–2 ч | **⏳ Следующий** |
+| Phase B повтор после BPF-правки | Прогнать iodine/dnscat2/exfil изолированно | 3–4 ч | Средний |
 
 ### 8.2 Технические улучшения
 
