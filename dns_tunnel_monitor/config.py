@@ -10,6 +10,7 @@ ENV_DEVMODE = "DEVMODE"
 ENV_CLUSTER_DNS_SUFFIXES = "CLUSTER_DNS_SUFFIXES"
 ENV_POD_RESOLVER_CACHE_TTL = "POD_RESOLVER_CACHE_TTL"
 ENV_TXT_WHITELIST_FILE = "TXT_WHITELIST_FILE"
+ENV_DEBUG_UNPARSEABLE = "DEBUG_UNPARSEABLE"
 
 # BUG-26: TTL кэша PodResolver (секунды). После истечения запись считается устаревшей и переразрешается.
 POD_RESOLVER_CACHE_TTL_SEC = int(os.environ.get(ENV_POD_RESOLVER_CACHE_TTL, "300").strip() or "300")
@@ -22,6 +23,9 @@ CLUSTER_DNS_SUFFIXES = [
 ]
 if not CLUSTER_DNS_SUFFIXES:
     CLUSTER_DNS_SUFFIXES = [".svc.cluster.local", ".cluster.local", ".pod.cluster.local"]
+
+# Диагностика <unparseable>: при 1 в stderr пишется ip_version и hex первых 12 байт payload.
+DEBUG_UNPARSEABLE = os.environ.get(ENV_DEBUG_UNPARSEABLE, "").strip().lower() in ("1", "true", "yes")
 
 RED = "\033[91m"
 GREEN = "\033[92m"

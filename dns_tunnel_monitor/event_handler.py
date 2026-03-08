@@ -92,7 +92,10 @@ def handle_event(event):
         "score": score,
         "threat_type": threat_type,
         "reasons": threat_reasons,
+        "ip_version": event.get("ip_version", 0),
     }
+    if domain == "<unparseable>":
+        json_record["payload_sample_hex"] = event.get("payload_sample_hex", "")
     print(json.dumps(json_record, ensure_ascii=False), file=sys.stderr)
 
     color = RED if is_suspicious else (BLUE if is_response else GREEN)
@@ -104,6 +107,12 @@ def handle_event(event):
         if domain and not domain.startswith("<"):
             entropy = calculate_entropy(domain.replace(".", ""))
             print(f"         {YELLOW}Entropy: {entropy:.2f} | Flags: 0x{dns_flags:04x}{RESET}")
+
+    # Диагностика причины <unparseable>: ip_version 6 => читали с неверного offset (IPv6)
+    if domain == "<unparseable>" and config.DEBUG_UNPARSEABLE:
+        ip_ver = event.get("ip_version", 0)
+        sample = event.get("payload_sample_hex", "")
+        print(f"[unparseable] ip_version={ip_ver} payload_hex(12)={sample} pod={client_pod} dir={direction}", file=sys.stderr, flush=True)
 
 
 def print_stats():

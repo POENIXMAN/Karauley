@@ -57,7 +57,7 @@ def load_bpf(cgroup_path, event_callback):
     resolver = PodResolver()
 
     def _perf_cb(cpu, data, size):
-        if size < 8 + 64:
+        if size < ctypes.sizeof(CgroupDNSEvent):
             return
         ev = ctypes.cast(data, ctypes.POINTER(CgroupDNSEvent)).contents
         payload_bytes = bytes(ev.payload)
@@ -77,7 +77,10 @@ def load_bpf(cgroup_path, event_callback):
             "dns_answers": dns_answers,
             "dns_type": dns_type,
             "timestamp_ns": time.time_ns(),
+            "ip_version": getattr(ev, "ip_version", 4),
         }
+        if domain == "<unparseable>":
+            normalized["payload_sample_hex"] = payload_bytes[:12].hex()
         try:
             event_callback(normalized)
         except Exception as e:

@@ -30,7 +30,7 @@
 |-----------|--------|--------|
 | **1** | **Валидация TP/FP** — iodine проведён; dnscat2, DNSExfiltrator (Фаза B/C), таблица метрик для ВКР | **В работе** |
 | 2 | **Артефакты метрик:** analyze.py — опция GT по домену (`.attack.test`) или исключение транзитных подов (CoreDNS) | Рекомендовано (см. VALIDATION_FINDINGS.md) |
-| 3 | **eBPF:** проверка возврата `bpf_skb_load_bytes`; опционально поддержка IPv6 (offset 48 для DNS payload) | Рекомендовано (снижает unparseable) |
+| 3 | **eBPF:** используется прямой доступ (ctx->data/data_end), одна bounds check; осталось: поддержка IPv6 (offset 48 для DNS payload) | Рекомендовано (снижает unparseable) |
 | 4 | Конфигурируемые пороги детекторов (config/env) | В плане |
 | 5 | BUG-23/24: ограничение роста stats["domains"], stats["by_pod"] | В плане |
 | 6 | BUG-30: Prometheus cardinality (namespace вместо pod, или bucket) | В плане |

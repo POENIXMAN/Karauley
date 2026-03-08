@@ -41,7 +41,7 @@ class TunnelDetector:
     def analyze(self, event):
         domain = event.get("domain", "") or ""
 
-        # Пропускаем события без распознанного домена (payload 64 байта, домен обрезан)
+        # Пропускаем события без распознанного домена (payload обрезан)
         if not domain or domain.startswith("<"):
             return False, None, [], 0
 
