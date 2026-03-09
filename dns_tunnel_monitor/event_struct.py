@@ -1,7 +1,5 @@
-"""BPF event structure (must match C layout)."""
 import ctypes
 
-# Must match PAYLOAD_SAMPLE in bpf/dns_cgroup.bpf.c
 PAYLOAD_SAMPLE = 128
 
 

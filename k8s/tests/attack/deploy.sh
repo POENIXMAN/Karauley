@@ -1,16 +1,4 @@
 #!/bin/bash
-#
-# Фаза B/C: деплой attack-инструментов в namespace attack.
-# Запускается один инструмент за раз. Перед сбором логов — прогрев 2 мин.
-#
-# Использование:
-#   ./deploy.sh ns              # создать namespace attack
-#   ./deploy.sh iodine          # задеплоить iodine client
-#   ./deploy.sh dnscat2         # задеплоить dnscat2 client
-#   ./deploy.sh exfil           # задеплоить DNSExfiltrator client
-#   ./deploy.sh stop [iodine|dnscat2|exfil]  # удалить один или все
-#   ./deploy.sh status          # статус подов в attack
-#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

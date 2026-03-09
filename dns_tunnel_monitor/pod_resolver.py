@@ -1,4 +1,3 @@
-"""Resolve cgroup_id to ns/podname (priority) or cgroup_id=... / host."""
 import os
 import stat
 import sys
@@ -11,7 +10,6 @@ import urllib.request
 
 from dns_tunnel_monitor import config
 
-# Set DEBUG_POD_RESOLVER=1 in the pod to log why resolution falls back to cgroup_id.
 _DEBUG = os.environ.get("DEBUG_POD_RESOLVER", "").strip().lower() in ("1", "true", "yes")
 
 def _debug_log(msg):
@@ -57,10 +55,7 @@ def _bpf_cgroup_get_fd_by_id(cgroup_id):
 
 
 def _find_cgroup_path_by_id(cgroup_id, root=None, max_dirs=50000):
-    """
-    Fallback when bpf_cgroup_get_fd_by_id fails (e.g. container cgroup namespace).
-    Walk cgroup fs (CGROUP_PATH) and find directory with inode == cgroup_id (cgroup v2).
-    """
+    """Fallback: walk cgroup fs, find dir with inode == cgroup_id (cgroup v2)."""
     if root is None:
         root = os.environ.get("CGROUP_PATH", "/sys/fs/cgroup")
     if not os.path.isdir(root):
@@ -113,10 +108,6 @@ def _cgroup_path_from_fd(fd):
 
 
 def _comm_from_cgroup_path(path):
-    """
-    Read first PID from cgroup.procs and its comm from /proc/<pid>/comm.
-    With hostPID we see host processes; gives a representative process in that cgroup (often the main container process).
-    """
     procs_file = os.path.join(path, "cgroup.procs")
     try:
         with open(procs_file, "r") as f:
@@ -184,20 +175,15 @@ def _k8s_resolve_uid_to_ns_name(uid_12):
 
 
 class PodResolver:
-    """Resolve cgroup_id to ns/podname and (best-effort) process name. BUG-26: кэш с TTL."""
-
     def __init__(self):
-        # cgroup_id -> {"client_pod": str, "process": str, "ts_ns": int}  (ts_ns = time.monotonic_ns())
         self._cache = {}
         self._ttl_ns = config.POD_RESOLVER_CACHE_TTL_SEC * 10**9
 
     def resolve(self, cgroup_id):
-        """Return client_pod string (ns/name or cgroup_id=...). Backward compatible."""
         entry = self._resolve_entry(cgroup_id)
         return entry["client_pod"]
 
     def resolve_with_process(self, cgroup_id):
-        """Return (client_pod, process). Process is from cgroup.procs + /proc/pid/comm (best-effort)."""
         entry = self._resolve_entry(cgroup_id)
         return entry["client_pod"], entry["process"]
 

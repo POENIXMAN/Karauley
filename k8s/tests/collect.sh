@@ -51,18 +51,15 @@ cleanup() {
 
 trap cleanup EXIT INT TERM
 
-# Найти все поды DaemonSet
 PODS=$(kubectl get pods -n "${NAMESPACE}" -l app.kubernetes.io/name="${DS_NAME}" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 
 if [ -z "$PODS" ]; then
-    # Попробуем другие частые лейблы
     PODS=$(kubectl get pods -n "${NAMESPACE}" -l app="${DS_NAME}" \
         -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 fi
 
 if [ -z "$PODS" ]; then
-    # Ищем по имени DaemonSet напрямую
     PODS=$(kubectl get pods -n "${NAMESPACE}" --field-selector=status.phase=Running \
         -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
         | grep "${DS_NAME}" || true)
@@ -88,7 +85,6 @@ echo "  DaemonSet:   ${NAMESPACE}/${DS_NAME}"
 echo "  Pods found:  ${POD_COUNT}"
 echo ""
 
-# Запустить сбор с каждого пода параллельно
 for pod in $PODS; do
     NODE=$(kubectl get pod "${pod}" -n "${NAMESPACE}" \
         -o jsonpath='{.spec.nodeName}' 2>/dev/null || echo "unknown")
@@ -96,8 +92,6 @@ for pod in $PODS; do
 
     POD_FILE="${TMPDIR_COLLECT}/${pod}.jsonl"
 
-    # kubectl logs --since=1s чтобы не тянуть старые логи;
-    # grep '^{' — только JSON-строки (отсекаем цветной текст из stdout)
     kubectl logs -f "${pod}" -n "${NAMESPACE}" --since=1s 2>/dev/null \
         | grep --line-buffered '^{' \
         >> "${POD_FILE}" &
@@ -110,7 +104,6 @@ if [ "${DURATION}" = "0" ] || [ "${DURATION}" = "0s" ] || [ "${DURATION}" = "0m"
     echo "=== Collecting indefinitely (Ctrl+C to stop) ==="
     wait
 else
-    # Конвертируем длительность в секунды
     SECONDS_TOTAL=0
     case "${DURATION}" in
         *m) SECONDS_TOTAL=$(( ${DURATION%m} * 60 )) ;;

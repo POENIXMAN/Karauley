@@ -1,4 +1,3 @@
-"""Exfiltration detector: entropy, long domains, Base64/hex subdomains."""
 import re
 from collections import defaultdict
 
@@ -7,11 +6,10 @@ from dns_tunnel_monitor import config
 
 
 class ExfiltrationDetector:
-    # BUG-16: ограничение роста — храним не более MAX_SUBDOMAINS_STORED поддоменов на base_domain
     MAX_SUBDOMAINS_STORED = 50
 
     def __init__(self):
-        self.subdomain_counts = defaultdict(list)  # list для ограничения размера (evict oldest)
+        self.subdomain_counts = defaultdict(list)
         self.ENTROPY_THRESHOLD = 4.1
         self.LENGTH_THRESHOLD = 60
         self.DIGIT_RATIO_THRESHOLD = 0.3
@@ -36,10 +34,7 @@ class ExfiltrationDetector:
 
         parts = domain.split('.')
         if len(parts) > 2:
-            # Проверяем ВСЕ поддомены на кодировку (экфильтрация: 1.base64data.exfil.test → chunk в parts[0], данные в parts[1])
-            # Порог 16 символов — минимальный размер осмысленных base64/hex данных (12 байт)
-            # Останавливаемся на первом совпадении (достаточно одного закодированного поддомена)
-            for subdomain in parts[:-2]:  # все кроме base_domain
+            for subdomain in parts[:-2]:
                 if len(subdomain) >= 16:
                     if re.match(r'^[0-9a-fA-F]+$', subdomain):
                         reasons.append("HEX_SUBDOMAIN")
@@ -50,8 +45,6 @@ class ExfiltrationDetector:
 
         if len(parts) >= 2:
             base_domain = '.'.join(parts[-2:])
-            # Пропускаем MANY_SUBDOMAINS для K8s cluster DNS (cluster.local, svc.cluster.local)
-            # иначе все K8s сервисы группируются под cluster.local и ложно срабатывают
             if base_domain not in config.CLUSTER_BASE_DOMAINS:
                 subdomain = '.'.join(parts[:-2])
                 lst = self.subdomain_counts[base_domain]

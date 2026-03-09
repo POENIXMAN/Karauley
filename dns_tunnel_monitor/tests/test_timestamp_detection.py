@@ -1,11 +1,3 @@
-"""
-Unit tests for timestamp-based detection (C2 beacon, IP-over-DNS rate).
-No BPF/kernel required — only detector logic with mock events.
-
-Run from dns_tunnel_monitor directory:
-  pytest tests/ -v
-  or: python -m pytest tests/ -v
-"""
 import sys
 import os
 _monitor_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -17,7 +9,6 @@ from detectors.ip_over_dns import IPOverDNSDetector
 
 
 def test_c2_beacon_regular_intervals():
-    """Regular queries every 10s should trigger C2_BEACON after MIN_SAMPLES."""
     det = C2Detector()
     base_ns = 1_000_000_000_000
     domain = "test-beacon.example.com"
@@ -39,7 +30,6 @@ def test_c2_beacon_regular_intervals():
 
 
 def test_c2_beacon_ignores_responses():
-    """Only query timestamps are used; responses should not trigger beacon."""
     det = C2Detector()
     base_ns = 1_000_000_000_000
     domain = "test.example.com"
@@ -83,13 +73,11 @@ def test_c2_beacon_ignores_responses():
 
 
 def test_ip_over_dns_high_rate():
-    """Many requests in a short time should trigger HIGH_RATE (rate > 50/sec, elapsed_sec > 1)."""
     det = IPOverDNSDetector()
     base_ns = 1_000_000_000_000
     domain = "rate-test.example.com"
     cgroup_id = 1
-    # 60 events over just over 1 second => rate ~60/sec (> RATE_THRESHOLD 50). Detector only computes rate when elapsed_sec > 1.
-    step_ns = 17_000_000  # 59 * 17e6 = 1.003e9 ns > 1e9
+    step_ns = 17_000_000
 
     for i in range(60):
         event = {
@@ -107,7 +95,6 @@ def test_ip_over_dns_high_rate():
 
 
 def test_ip_over_dns_null_record():
-    """NULL (type 10) should always add NULL_RECORD reason."""
     det = IPOverDNSDetector()
     event = {
         "domain": "x.iodine.example.com",
@@ -122,7 +109,6 @@ def test_ip_over_dns_null_record():
 
 
 def test_c2_no_timestamp_no_beacon():
-    """Without timestamp_ns, beacon logic should not fire (no intervals)."""
     det = C2Detector()
     for i in range(7):
         det.check({

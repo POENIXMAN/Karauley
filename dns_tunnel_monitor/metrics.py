@@ -1,4 +1,3 @@
-"""Flask + Prometheus: /healthz, /ready, /metrics."""
 import sys
 
 try:
@@ -31,7 +30,6 @@ if FLASK_AVAILABLE:
         return generate_latest(), 200, {'Content-Type': CONTENT_TYPE_LATEST}
 
     def _init_metrics():
-        """Expose dns_* series from first scrape (prometheus_client only creates series on first inc/set)."""
         dns_domains_unique.set(0)
         dns_queries_total.labels(protocol="UDP").inc(0)
         dns_responses_total.labels(protocol="UDP").inc(0)

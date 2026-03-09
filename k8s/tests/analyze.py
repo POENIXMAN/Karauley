@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-Анализ JSONL-логов dns-tunnel-monitor: confusion matrix, метрики, отчёт.
-
-Использование:
-    python analyze.py results/baseline.jsonl                     # Фаза A
-    python analyze.py results/attack_iodine.jsonl                # Фаза B
-    python analyze.py results/mixed_iodine.jsonl                 # Фаза C
-    python analyze.py results/mixed_iodine.jsonl --threshold 3   # Пересчёт с другим порогом
-    python analyze.py results/phase_C.jsonl --gt-by-domain       # GT по домену (*.attack.test → attack), убирает артефакт CoreDNS
-    python analyze.py results/*.jsonl --summary                  # Сводная таблица по всем файлам
-"""
 
 import json
 import sys
@@ -20,7 +9,6 @@ from pathlib import Path
 
 
 def _is_attack_domain(domain, attack_domain_suffix="attack.test"):
-    """True если домен — атакующий (например *.attack.test или *.*.attack.test.lan)."""
     if not domain or domain.startswith("<") or not isinstance(domain, str):
         return False
     d = domain.lower()
@@ -37,7 +25,6 @@ def _is_attack_domain(domain, attack_domain_suffix="attack.test"):
 
 
 def classify_by_pod(pod_name, attack_namespace="attack"):
-    """Определяет ground-truth label по namespace пода."""
     if not pod_name or pod_name == "unknown":
         return "unknown"
     if "/" in pod_name:
@@ -55,13 +42,8 @@ def classify_by_pod(pod_name, attack_namespace="attack"):
 
 
 def classify_event(pod_name, domain, gt_by_domain=False, attack_namespace="attack", attack_domain_suffix="attack.test"):
-    """
-    Ground-truth label: по поду (default) или по домену (--gt-by-domain).
-    При gt_by_domain: домены *.attack.test и т.п. → attack; иначе fallback на под.
-    """
     if gt_by_domain and domain:
         if _is_attack_domain(domain, attack_domain_suffix):
-            # Уточняем tool по домену если возможно
             d = domain.lower()
             if "exfil" in d or "dnsexfil" in d:
                 return "attack:exfil"
@@ -75,7 +57,6 @@ def classify_event(pod_name, domain, gt_by_domain=False, attack_namespace="attac
 
 
 def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt_by_domain=False, attack_domain_suffix="attack.test"):
-    """Парсит JSONL и строит confusion matrix."""
     tp = fp = fn = tn = 0
     fp_domains = Counter()
     fn_domains = Counter()
@@ -183,7 +164,6 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
 
 
 def print_report(result):
-    """Выводит отчёт по одному файлу."""
     f = result
     name = os.path.basename(f["file"])
     threshold_info = f" (пересчёт с threshold={f['score_threshold']})" if f["score_threshold"] else ""
@@ -240,7 +220,6 @@ def print_report(result):
 
 
 def print_summary_table(results):
-    """Сводная таблица для ВКР."""
     print(f"\n{'='*110}")
     print(f"  СВОДНАЯ ТАБЛИЦА")
     print(f"{'='*110}")
@@ -256,7 +235,6 @@ def print_summary_table(results):
 
 
 def save_results_json(result, output_dir):
-    """Сохраняет результаты в JSON для дальнейшей обработки."""
     os.makedirs(output_dir, exist_ok=True)
     name = Path(result["file"]).stem
 

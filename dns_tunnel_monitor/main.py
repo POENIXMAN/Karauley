@@ -1,4 +1,3 @@
-"""Entry point: load BPF, start metrics HTTP, poll perf buffer."""
 import os
 import sys
 import signal

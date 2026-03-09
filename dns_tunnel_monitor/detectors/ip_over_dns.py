@@ -1,13 +1,10 @@
-"""IP-Over-DNS detector: NULL records, high rate, many answers."""
 from collections import OrderedDict
 
 
 class IPOverDNSDetector:
-    # NEW-01: ограничение числа ключей — LRU eviction (как в c2.py)
     MAX_KEYS = 10_000
 
     def __init__(self):
-        # key -> (request_count, first_seen_ns); OrderedDict для LRU
         self._key_data = OrderedDict()
         self.WINDOW_NS = 10 * 1e9
         self.RATE_THRESHOLD = 150

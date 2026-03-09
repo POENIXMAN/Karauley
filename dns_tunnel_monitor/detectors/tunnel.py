@@ -1,10 +1,8 @@
-"""TunnelDetector: runs C2, Exfil, IP-Over-DNS. ISSUE-22: scoring вместо бинарного OR."""
 from dns_tunnel_monitor import config
 from dns_tunnel_monitor.detectors.c2 import C2Detector
 from dns_tunnel_monitor.detectors.exfil import ExfiltrationDetector
 from dns_tunnel_monitor.detectors.ip_over_dns import IPOverDNSDetector
 
-# Веса причин: сильные сигналы (beacon, rate, NULL) — выше; один слабый (TXT) не даёт алерт
 REASON_WEIGHTS = {
     "C2_BEACON": 3,
     "C2_TXT_REQUEST": 1,
@@ -22,7 +20,6 @@ SCORE_THRESHOLD = 2
 
 
 def _score_reasons(reasons):
-    """Сумма весов по префиксу причины (например HIGH_ENTROPY(4.5) -> HIGH_ENTROPY)."""
     total = 0
     for r in reasons:
         for prefix, w in REASON_WEIGHTS.items():
@@ -40,13 +37,8 @@ class TunnelDetector:
 
     def analyze(self, event):
         domain = event.get("domain", "") or ""
-
-        # Пропускаем события без распознанного домена (payload обрезан)
         if not domain or domain.startswith("<"):
             return False, None, [], 0
-
-        # K8S: не детектируем только легитимный cluster DNS (строгий паттерн),
-        # не exfil.attack.test.svc.cluster.local из ndots expansion (VALIDATION_FINDINGS 5.4)
         if config.is_legitimate_cluster_dns(domain):
             return False, None, [], 0
 

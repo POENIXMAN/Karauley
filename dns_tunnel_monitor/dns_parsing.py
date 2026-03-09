@@ -1,10 +1,9 @@
-"""DNS payload parsing: domain name, type, entropy."""
 import math
 from collections import defaultdict
 
 
 def parse_dns_name(data, offset=12):
-    """Parse DNS name with compression pointer support."""
+    """DNS name with compression pointer (0xC0); max 10 jumps to avoid loops."""
     labels = []
     i = offset
     max_jumps = 10

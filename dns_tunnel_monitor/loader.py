@@ -1,4 +1,3 @@
-"""Load BPF (cgroup_skb), attach to cgroup, open perf buffer."""
 import os
 import sys
 import ctypes
@@ -14,7 +13,6 @@ from dns_tunnel_monitor.pod_resolver import PodResolver
 
 
 def _parse_payload(payload_bytes):
-    """Extract domain, dns_id, dns_flags, dns_answers, dns_type from first bytes."""
     data = list(payload_bytes)
     domain = None
     if len(data) >= 12:
@@ -30,11 +28,7 @@ def _parse_payload(payload_bytes):
 
 
 def load_bpf(cgroup_path, event_callback):
-    """
-    Load BPF from bpf/dns_cgroup.bpf.c, attach to cgroup_path, open perf buffer.
-    event_callback(normalized_event_dict) is called for each DNS packet.
-    Returns (bpf_object, cgroup_fd) or (None, error_msg).
-    """
+    """Returns (bpf_object, cgroup_fd) or (None, error_msg). event_callback(normalized_event_dict) per packet."""
     if not os.path.isfile(config.BPF_SOURCE_FILE):
         return None, f"BPF source not found: {config.BPF_SOURCE_FILE}"
 

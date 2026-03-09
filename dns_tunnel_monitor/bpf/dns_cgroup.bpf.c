@@ -1,19 +1,3 @@
-/*
- * DNS monitor via cgroup_skb: cluster-agnostic, identifies source by cgroup_id.
- *
- * Packet access: direct (ctx->data / data_end) instead of bpf_skb_load_bytes.
- * - Pro: one bounds check, verifier-friendly; no helper call per read; explicit.
- * - Con: only linear part of skb; fragmented UDP could see less than 92 bytes
- *   (for typical DNS over UDP, packets are small and linear — OK).
- * - IPv4 only: DNS payload at offset 28. IPv6 would need offset 48 (not yet).
- *
- * Tuning (keep in sync with event_struct.PAYLOAD_SAMPLE in Python):
- * - MIN_PAYLOAD: min DNS payload bytes required to accept packet. Keep small (e.g. 12 = DNS
- *   header) so we do not drop short queries; tail is zero-padded when copying.
- * - PAYLOAD_SAMPLE: bytes we copy to userspace (rest zero-padded if packet shorter).
- *   128 covers known tunnel tools (e.g. DNSExfiltrator 55-char chunks). 256 for extra margin;
- *   UDP DNS payload max 512.
- */
 #include <uapi/linux/bpf.h>
 #include <linux/in.h>
 #include <linux/ip.h>
@@ -23,7 +7,7 @@
 
 /* Min DNS payload length to accept packet; rest zero-padded. 12 = DNS header only. */
 #define MIN_PAYLOAD 12
-/* Bytes copied to userspace; increase to 256 if needed for very long names. */
+/* Bytes copied to userspace;  */
 #define PAYLOAD_SAMPLE 128
 
 #define MIN_PKT_LEN (28 + MIN_PAYLOAD)

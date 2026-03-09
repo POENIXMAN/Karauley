@@ -1,9 +1,7 @@
-"""C2 detector: regularity, TXT requests."""
 from collections import OrderedDict
 
 from dns_tunnel_monitor.whitelist_loader import load_txt_whitelist
 
-# Кэш whitelist (загружается один раз, при необходимости из файла TXT_WHITELIST_FILE)
 _txt_whitelist_cache = None
 
 
@@ -15,7 +13,6 @@ def _get_txt_whitelist():
 
 
 class C2Detector:
-    # BUG-11: ограничение числа ключей (cgroup_id, base_domain) — LRU eviction
     MAX_QUERY_HISTORY_KEYS = 10_000
 
     def __init__(self):
@@ -31,7 +28,6 @@ class C2Detector:
 
         key = (event.get('cgroup_id', 0), base_domain)
         timestamp = event.get('timestamp_ns', 0)
-        # Beacon regularity: only use query timestamps (responses would skew intervals)
         if event.get('direction') == 'query' and timestamp:
             if key in self.query_history:
                 timestamps = self.query_history.pop(key)

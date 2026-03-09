@@ -14,7 +14,7 @@ Plug-and-play детекция DNS-туннелей в Kubernetes. Исполь�
 
 ### Компоненты
 
-1. **BPF (ядро)** — программа в `bpf/dns_cgroup.bpf.c`: привязана к cgroup через **cgroup_skb**, срабатывает на каждый UDP-пакет с портом 53 (egress и ingress). В пользовательское пространство уходит событие: `direction`, `cgroup_id`, сэмпл payload (первые 64 байта DNS).
+1. **BPF (ядро)** — программа в `bpf/dns_cgroup.bpf.c`: привязана к cgroup через **cgroup_skb**, срабатывает на каждый UDP-пакет с портом 53 (egress и ingress). В пользовательское пространство уходит событие: `direction`, `cgroup_id`, сэмпл payload (первые 128 байта DNS).
 2. **Loader** (`loader.py`) — загружает BPF, вешает egress/ingress хуки на заданный cgroup, открывает perf buffer; для каждого события парсит DNS (домен, id, флаги, тип записи) и через **PodResolver** переводит `cgroup_id` в `namespace/podname` (или `cgroup_id=...` / host). Вызывает `event_callback` с нормализованным событием.
 3. **Event handler** (`event_handler.py`) — обрабатывает каждое событие: обновляет счётчики, метрики Prometheus, передаёт событие в **TunnelDetector**; при подозрении — логирует и инкрементирует `dns_suspicious_total`.
 4. **Detectors** (`detectors/`) — эвристики: C2 (подозрительные домены/паттерны), Exfil (высокая энтропия, длинные поддомены), IP-over-DNS (типы записей A/TXT и объём). Результат: флаг «подозрительно» и тип угрозы (C2, EXFIL, TUNNEL).

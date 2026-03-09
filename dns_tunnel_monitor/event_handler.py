@@ -1,4 +1,3 @@
-"""Handle normalized DNS event: stats, detectors, metrics, log."""
 import json
 import sys
 from collections import defaultdict
@@ -27,7 +26,6 @@ stats = {
 
 
 def handle_event(event):
-    """Process one normalized event (dict from loader)."""
     global stats
     domain = event.get("domain", "<unparseable>")
     direction = event.get("direction", "query")
@@ -80,7 +78,6 @@ def handle_event(event):
         if metrics.FLASK_AVAILABLE:
             metrics.dns_suspicious_total.labels(threat_type=threat_type or "UNKNOWN").inc()
 
-    # Structured JSON log to stderr for automated parsing (testing, confusion matrix)
     json_record = {
         "ts": event.get("timestamp_ns", 0),
         "domain": domain,
@@ -108,7 +105,6 @@ def handle_event(event):
             entropy = calculate_entropy(domain.replace(".", ""))
             print(f"         {YELLOW}Entropy: {entropy:.2f} | Flags: 0x{dns_flags:04x}{RESET}")
 
-    # Диагностика причины <unparseable>: ip_version 6 => читали с неверного offset (IPv6)
     if domain == "<unparseable>" and config.DEBUG_UNPARSEABLE:
         ip_ver = event.get("ip_version", 0)
         sample = event.get("payload_sample_hex", "")

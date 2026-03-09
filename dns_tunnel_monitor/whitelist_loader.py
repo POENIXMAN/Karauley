@@ -1,14 +1,11 @@
-"""Load TXT whitelist from file (UTF-8). No rebuild needed — mount ConfigMap, set env, restart pod."""
 import os
 
 from dns_tunnel_monitor import config
 
-# Секции в файле: [domains] — суффиксы (.google.com), [prefixes] — префиксы (_dmarc.), [roots] — точное совпадение (sendgrid.com)
 SECTIONS = ("domains", "prefixes", "roots")
 
 
 def _parse_whitelist_file(path):
-    """Parse file: [domains], [prefixes], [roots]. Returns dict section -> set of strings."""
     result = {s: set() for s in SECTIONS}
     current = None
     try:
@@ -31,12 +28,6 @@ def _parse_whitelist_file(path):
 
 
 def load_txt_whitelist():
-    """
-    Load TXT whitelist: built-in + optional file (env TXT_WHITELIST_FILE).
-    File is UTF-8; sections [domains], [prefixes], [roots] add to built-in.
-    Returns (prefixes_tuple, domains_suffix_tuple, roots_set).
-    """
-    # Встроенные списки (как в коде сейчас)
     builtin_prefixes = (
         "_dmarc.", "_domainkey.", "_mta-sts.", "_smtp._tls.",
         "_acme-challenge.", "_bimi.", "_dnslink.",
