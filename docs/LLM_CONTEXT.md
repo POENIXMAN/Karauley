@@ -96,4 +96,8 @@ SCORE_THRESHOLD = 2. Домены, для которых `is_legitimate_cluster_
 | Deployment | Helm → DaemonSet (privileged) |
 | Цель | Kubernetes, cgroup v2, UDP/IPv4 DNS |
 
-Подробные результаты валидации и интерпретация метрик — в `VALIDATION_PHASE_C.md` и (исторически) в `docs_old/VALIDATION_FINDINGS.md`.
+Основная новая документация проекта:
+
+- `DETECTION_ALGORITHMS.md` — алгоритмы детекции, признаки, ограничения.
+- `TESTING_AND_VALIDATION.md` — методология ground truth, результаты фаз A/B/C, интерпретация и ограничения обобщаемости.
+- `ROADMAP_AND_NEXT_STEPS.md` — что ещё нужно для сильной версии ВКР и дальнейшего развития системы.
