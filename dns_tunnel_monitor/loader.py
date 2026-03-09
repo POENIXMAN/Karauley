@@ -50,10 +50,11 @@ def load_bpf(cgroup_path, event_callback):
 
     resolver = PodResolver()
 
-    def _perf_cb(cpu, data, size):
+    def _ringbuf_cb(ctx, data, size):
         if size < ctypes.sizeof(CgroupDNSEvent):
             return
-        ev = ctypes.cast(data, ctypes.POINTER(CgroupDNSEvent)).contents
+        raw_event = ctypes.string_at(data, size)
+        ev = CgroupDNSEvent.from_buffer_copy(raw_event[:ctypes.sizeof(CgroupDNSEvent)])
         payload_bytes = bytes(ev.payload)
         domain, dns_id, dns_flags, dns_answers, dns_type = _parse_payload(payload_bytes)
         is_response = (dns_flags & 0x8000) != 0
@@ -80,5 +81,12 @@ def load_bpf(cgroup_path, event_callback):
         except Exception as e:
             print(f"[!] event_callback error: {e}", file=sys.stderr, flush=True)
 
-    bpf["events"].open_perf_buffer(_perf_cb)
+    try:
+        bpf["events"].open_ring_buffer(_ringbuf_cb)
+    except Exception as e:
+        try:
+            os.close(cgroup_fd)
+        except OSError:
+            pass
+        return None, f"Failed to open ring buffer (requires BCC/kernel ringbuf support): {e}"
     return bpf, cgroup_fd

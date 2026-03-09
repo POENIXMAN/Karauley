@@ -9,6 +9,12 @@
 #define MIN_PAYLOAD 12
 /* Bytes copied to userspace;  */
 #define PAYLOAD_SAMPLE 128
+/*
+ * Shared ring buffer size in pages.
+ * struct event_t is ~152 bytes, so 64 pages (~256 KiB) gives room for
+ * roughly 1.5k in-flight events and is less burst-sensitive than 8 pages.
+ */
+#define EVENTS_RINGBUF_PAGES 64
 
 #define MIN_PKT_LEN (28 + MIN_PAYLOAD)
 
@@ -20,7 +26,7 @@ struct event_t {
     uint8_t  ip_version;  /* first nibble of packet (4 or 6) — for unparseable diagnostics */
 };
 
-BPF_PERF_OUTPUT(events);
+BPF_RINGBUF_OUTPUT(events, EVENTS_RINGBUF_PAGES);
 
 static __always_inline int monitor_dns(struct __sk_buff *ctx, uint8_t dir) {
     void *data = (void *)(long)ctx->data;
@@ -49,7 +55,7 @@ static __always_inline int monitor_dns(struct __sk_buff *ctx, uint8_t dir) {
             ev.payload[i] = 0;
     }
 
-    events.perf_submit(ctx, &ev, sizeof(ev));
+    events.ringbuf_output(&ev, sizeof(ev), 0);
     return 1;
 }
 

@@ -61,7 +61,7 @@ def main():
 
     try:
         while True:
-            bpf.perf_buffer_poll(300)
+            bpf.ring_buffer_poll(300)
     except KeyboardInterrupt:
         pass
     finally:

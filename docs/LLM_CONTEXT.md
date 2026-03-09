@@ -18,7 +18,7 @@
 ## 2. Архитектура (по коду)
 
 ```
-Pod DNS (UDP/53) → BPF cgroup_skb → perf buffer
+Pod DNS (UDP/53) → BPF cgroup_skb → ring buffer
   → loader: parse payload → domain, dns_id, flags, answers, type
   → pod_resolver: cgroup_id → (client_pod, process)
   → event_handler: stats, tunnel_detector.analyze(), JSON в stderr, метрики
@@ -34,7 +34,7 @@ Pod DNS (UDP/53) → BPF cgroup_skb → perf buffer
 dns_tunnel_monitor/
   bpf/dns_cgroup.bpf.c   # BPF: egress/ingress hook, event_t (direction, cgroup_id, payload[128], ip_version)
   event_struct.py        # CgroupDNSEvent (ctypes): layout должен совпадать с struct event_t в bpf/dns_cgroup.bpf.c; PAYLOAD_SAMPLE=128
-  loader.py              # load_bpf(), _parse_payload(), perf_cb → event_callback(normalized)
+  loader.py              # load_bpf(), _parse_payload(), ringbuf_cb → event_callback(normalized)
   dns_parsing.py         # parse_dns_name (compression), parse_dns_type, get_dns_type_name, calculate_entropy
   config.py              # BPF path, CGROUP_PATH, CLUSTER_DNS_SUFFIXES, CLUSTER_BASE_DOMAINS, is_legitimate_cluster_dns(), DEBUG_UNPARSEABLE
   pod_resolver.py        # PodResolver: cgroup_id → (client_pod, process), TTL cache, bpf_cgroup_get_fd / cgroup fs walk / K8s API
@@ -46,7 +46,7 @@ dns_tunnel_monitor/
     ip_over_dns.py       # IPOverDNSDetector: per-key rate (WINDOW_NS, RATE_THRESHOLD), NULL (type 10), MANY_ANSWERS
   whitelist_loader.py    # load_txt_whitelist(): [domains], [prefixes], [roots] + built-in
   metrics.py             # Flask: /healthz, /ready, /metrics; prometheus_client
-  main.py                # load_bpf, metrics thread, perf_buffer_poll, SIGINT/SIGTERM
+  main.py                # load_bpf, metrics thread, ring_buffer_poll, SIGINT/SIGTERM
 
 k8s/tests/
   analyze.py             # JSONL → confusion matrix. Usage: analyze.py <file.jsonl> [--threshold N] [--gt-by-domain] [--attack-domain SUFFIX] [--summary] [--save]
