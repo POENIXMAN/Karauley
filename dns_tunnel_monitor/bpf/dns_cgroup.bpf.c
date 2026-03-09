@@ -8,11 +8,9 @@
 /* Min DNS payload length to accept packet; rest zero-padded. 12 = DNS header only. */
 #define MIN_PAYLOAD 12
 /* Bytes copied to userspace;  */
-#define PAYLOAD_SAMPLE 128
+#define PAYLOAD_SAMPLE 256
 /*
  * Shared ring buffer size in pages.
- * struct event_t is ~152 bytes, so 64 pages (~256 KiB) gives room for
- * roughly 1.5k in-flight events and is less burst-sensitive than 8 pages.
  */
 #define EVENTS_RINGBUF_PAGES 64
 

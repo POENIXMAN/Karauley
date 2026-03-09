@@ -1,6 +1,6 @@
 import ctypes
 
-PAYLOAD_SAMPLE = 128
+PAYLOAD_SAMPLE = 256
 
 
 class CgroupDNSEvent(ctypes.Structure):
