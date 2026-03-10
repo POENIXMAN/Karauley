@@ -94,7 +94,19 @@ for pod in $PODS; do
 
     kubectl logs -f "${pod}" -n "${NAMESPACE}" --since=1s 2>/dev/null \
         | grep --line-buffered '^{' \
-        >> "${POD_FILE}" &
+        | python3 -c "
+import sys, json
+node = sys.argv[1]
+for line in sys.stdin:
+    line = line.rstrip()
+    if not line or not line.startswith('{'): continue
+    try:
+        o = json.loads(line)
+        o['node'] = node
+        print(json.dumps(o, ensure_ascii=False))
+    except Exception:
+        pass
+" "${NODE}" >> "${POD_FILE}" &
 
 done
 

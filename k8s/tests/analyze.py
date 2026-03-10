@@ -70,6 +70,7 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
     events_total = 0
     parse_errors = 0
     unparseable_count = 0
+    events_by_node = Counter()
 
     with open(jsonl_path) as f:
         for line_no, line in enumerate(f, 1):
@@ -83,6 +84,7 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
                 continue
 
             events_total += 1
+            events_by_node[ev.get("node", "unknown")] += 1
             pod = ev.get("pod", "unknown")
             domain = ev.get("domain", "")
             if domain == "<unparseable>" or (domain and str(domain).startswith("<")):
@@ -147,6 +149,7 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
         "parse_errors": parse_errors,
         "unparseable_count": unparseable_count,
         "unparseable_pct": unparseable_pct,
+        "events_by_node": dict(events_by_node),
         "gt_by_domain": gt_by_domain,
         "attack_domain_suffix": attack_domain_suffix,
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
@@ -181,6 +184,12 @@ def print_report(result):
     print(f"  Events: {f['events_total']}  (parse errors: {f['parse_errors']})")
     if f.get("unparseable_count") is not None:
         print(f"  Unparseable (domain): {f['unparseable_count']}  ({f.get('unparseable_pct', 0):.2f}%)")
+    if f.get("events_by_node"):
+        print(f"  Events by node:")
+        total_n = f["events_total"]
+        for node, count in sorted(f["events_by_node"].items(), key=lambda x: -x[1]):
+            pct = (count / total_n * 100.0) if total_n else 0
+            print(f"    {node:<25} {count:>8}  ({pct:.1f}%)")
     print()
 
     print(f"  {'Confusion Matrix':^40}")
