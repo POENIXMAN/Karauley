@@ -69,6 +69,7 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
     first_alert_ts = None
     events_total = 0
     parse_errors = 0
+    unparseable_count = 0
 
     with open(jsonl_path) as f:
         for line_no, line in enumerate(f, 1):
@@ -84,6 +85,8 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
             events_total += 1
             pod = ev.get("pod", "unknown")
             domain = ev.get("domain", "")
+            if domain == "<unparseable>" or (domain and str(domain).startswith("<")):
+                unparseable_count += 1
             score = ev.get("score", 0)
             reasons = ev.get("reasons", [])
             threat_type = ev.get("threat_type")
@@ -137,10 +140,13 @@ def analyze_file(jsonl_path, attack_namespace="attack", score_threshold=None, gt
     def avg(lst):
         return sum(lst) / len(lst) if lst else 0.0
 
+    unparseable_pct = (unparseable_count / events_total * 100.0) if events_total else 0.0
     return {
         "file": str(jsonl_path),
         "events_total": events_total,
         "parse_errors": parse_errors,
+        "unparseable_count": unparseable_count,
+        "unparseable_pct": unparseable_pct,
         "gt_by_domain": gt_by_domain,
         "attack_domain_suffix": attack_domain_suffix,
         "tp": tp, "fp": fp, "fn": fn, "tn": tn,
@@ -173,6 +179,8 @@ def print_report(result):
     print(f"  {name}{threshold_info}{gt_info}")
     print(f"{'='*70}")
     print(f"  Events: {f['events_total']}  (parse errors: {f['parse_errors']})")
+    if f.get("unparseable_count") is not None:
+        print(f"  Unparseable (domain): {f['unparseable_count']}  ({f.get('unparseable_pct', 0):.2f}%)")
     print()
 
     print(f"  {'Confusion Matrix':^40}")
