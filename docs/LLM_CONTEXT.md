@@ -50,7 +50,7 @@ dns_tunnel_monitor/
 
 k8s/tests/
   analyze.py             # JSONL → confusion matrix. Usage: analyze.py <file.jsonl> [--threshold N] [--gt-by-domain] [--attack-domain SUFFIX] [--summary] [--save]
-  collect.sh             # kubectl logs по подам DaemonSet, grep '^{', merge → results/<label>.jsonl. Usage: collect.sh <label> <duration> [namespace] [daemonset-name]
+  collect.sh             # kubectl logs по подам DaemonSet, grep '^{', инъекция поля node, merge → results/<label>.jsonl. Usage: collect.sh <label> <duration> [namespace] [daemonset-name]
   attack/deploy.sh       # ns | iodine | dnscat2 | exfil | stop | status
   baseline/deploy.sh    # apply | stop | status — baseline traffic
 ```

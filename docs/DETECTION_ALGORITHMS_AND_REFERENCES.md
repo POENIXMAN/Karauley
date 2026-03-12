@@ -21,7 +21,7 @@
 ## 2. Общая схема детекции в мониторе
 
 ```
-DNS packet (64 B payload) → парсинг (домен, type, answers) → 3 детектора:
+DNS packet (payload sample 128 B) → парсинг (домен, type, answers) → 3 детектора:
   - C2 detector      → beacon regularity, TXT к недоверенным доменам
   - Exfil detector   → энтропия, длина, цифры, hex/base64 subdomain, много поддоменов
   - IP-over-DNS      → высокий rate, NULL-запись, много записей в ответе
