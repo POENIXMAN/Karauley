@@ -1,0 +1,68 @@
+# Правила алертов для DNS Tunnel Monitor (метрики Prometheus).
+#
+# Перед использованием:
+# 1. Подставьте реальный UID источника данных Prometheus в datasourceUid (см. Configuration → Data sources → Prometheus → UID).
+# 2. Либо создайте правило в UI (Alerts → Alert rules → New → по метрике dns_suspicious_total), затем Export rule group и замените/дополните этот файл.
+#
+# Метрики: dns_suspicious_total{threat_type}, dns_events_by_pod{client_pod,direction}, dns_queries_total.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: dns_tunnel_monitor
+    folder: DNS Tunnel Monitor
+    interval: 60s
+    rules:
+      # Алерт: появились подозрительные DNS-события (любой тип угрозы)
+      - uid: dns-suspicious-any
+        title: DNS suspicious activity (any threat type)
+        condition: C
+        data:
+          # Запрос A: прирост подозрительных за 5 минут по всем типам
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: PROMETHEUS_UID
+            model:
+              expr: sum(increase(dns_suspicious_total[5m])) by (threat_type, instance)
+              refId: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+          # Условие: последнее значение A > 0
+          - refId: C
+            relativeTimeRange:
+              from: 0
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 0
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: sum(increase(dns_suspicious_total[5m])) > 0
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: math
+        noDataState: OK
+        execErrState: Alerting
+        for: 1m
+        annotations:
+          summary: "Подозрительный DNS-трафик (туннель/C2/exfil)"
+          description: "За последние 5 минут зафиксирован прирост dns_suspicious_total. Проверьте метрики по threat_type и client_pod."
+        labels:
+          severity: warning
+          component: dns-tunnel-monitor
