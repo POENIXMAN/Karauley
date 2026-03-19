@@ -20,7 +20,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(dns_queries_total)", "legendFormat": "Queries", "refId": "A" }
       ],
-      "title": "DNS queries (total)",
+      "title": "DNS queries (total, all time)",
       "type": "stat"
     },
     {
@@ -36,7 +36,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(dns_responses_total)", "legendFormat": "Responses", "refId": "A" }
       ],
-      "title": "DNS responses (total)",
+      "title": "DNS responses (total, all time)",
       "type": "stat"
     },
     {
@@ -52,7 +52,7 @@
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(dns_suspicious_total)", "legendFormat": "Suspicious", "refId": "A" }
       ],
-      "title": "Suspicious DNS (total)",
+      "title": "Suspicious DNS (total, all time)",
       "type": "stat"
     },
     {
@@ -66,9 +66,57 @@
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "dns_domains_unique", "legendFormat": "Unique domains", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "dns_domains_unique", "legendFormat": "{{ instance }}", "refId": "A" }
       ],
-      "title": "Unique domains",
+      "title": "Unique domains by node",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
+      "id": 10,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_queries_total[1m]))", "legendFormat": "Queries", "refId": "A" }
+      ],
+      "title": "DNS queries (current, last 1m)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 4 },
+      "id": 11,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_responses_total[1m]))", "legendFormat": "Responses", "refId": "A" }
+      ],
+      "title": "DNS responses (current, last 1m)",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "mappings": [], "thresholds": { "mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}] }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 4 },
+      "id": 12,
+      "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[1m]))", "legendFormat": "Suspicious", "refId": "A" }
+      ],
+      "title": "Suspicious DNS (current, last 1m)",
       "type": "stat"
     },
     {
@@ -77,13 +125,13 @@
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" } }, "unit": "reqps" },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "id": 5,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(rate(dns_queries_total[5m])) by (instance)", "legendFormat": "{{ instance }}", "refId": "A" }
       ],
-      "title": "DNS query rate by instance",
+      "title": "DNS query rate by node (instance)",
       "type": "timeseries"
     },
     {
@@ -92,13 +140,13 @@
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" } }, "unit": "reqps" },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "id": 6,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(rate(dns_suspicious_total[5m])) by (threat_type, instance)", "legendFormat": "{{ threat_type }} ({{ instance }})", "refId": "A" }
       ],
-      "title": "Suspicious DNS rate by threat type",
+      "title": "Suspicious DNS rate by threat type and node",
       "type": "timeseries"
     },
     {
@@ -107,13 +155,13 @@
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "none" }, "thresholdsStyle": { "mode": "off" } }, "unit": "short" },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "id": 7,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "dns_domains_unique", "legendFormat": "Unique domains", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "dns_domains_unique", "legendFormat": "{{ instance }}", "refId": "A" }
       ],
-      "title": "Unique domains over time",
+      "title": "Unique domains over time by node",
       "type": "timeseries"
     },
     {
@@ -122,13 +170,13 @@
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "normal" }, "thresholdsStyle": { "mode": "off" } }, "unit": "reqps" },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "id": 8,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": true } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "topk(10, sum(rate(dns_events_by_pod[5m])) by (client_pod))", "legendFormat": "{{ client_pod }}", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "topk(10, sum(rate(dns_events_by_pod[5m])) by (instance, client_pod))", "legendFormat": "{{ instance }} / {{ client_pod }}", "refId": "A" }
       ],
-      "title": "Top 10 pods by DNS event rate",
+      "title": "Top 10 pods by DNS event rate (by node)",
       "type": "timeseries"
     },
     {
@@ -137,13 +185,28 @@
         "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "normal" }, "thresholdsStyle": { "mode": "off" } }, "unit": "short" },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 20 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "id": 9,
       "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true } },
       "targets": [
         { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(dns_suspicious_total) by (threat_type)", "legendFormat": "{{ threat_type }}", "refId": "A" }
       ],
-      "title": "Suspicious total by threat type (C2 / EXFIL / TUNNEL)",
+      "title": "Suspicious total by threat type (all time)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "bars", "fillOpacity": 80, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showFrom": "auto", "spanNulls": false, "stacking": { "group": "A", "mode": "normal" }, "thresholdsStyle": { "mode": "off" } }, "unit": "short" },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "id": 13,
+      "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true } },
+      "targets": [
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[1m])) by (threat_type)", "legendFormat": "{{ threat_type }}", "refId": "A" }
+      ],
+      "title": "Suspicious by threat type (current, last 1m)",
       "type": "timeseries"
     }
   ],
@@ -174,5 +237,5 @@
   "timezone": "browser",
   "title": "DNS Tunnel Monitor",
   "uid": "dns-tunnel-monitor",
-  "version": 1
+  "version": 2
 }
