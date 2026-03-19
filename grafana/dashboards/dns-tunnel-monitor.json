@@ -82,9 +82,9 @@
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_queries_total[1m]))", "legendFormat": "Queries", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_queries_total[$__range]))", "legendFormat": "Queries", "refId": "A" }
       ],
-      "title": "DNS queries (current, last 1m)",
+      "title": "DNS queries (in selected time range)",
       "type": "stat"
     },
     {
@@ -98,9 +98,9 @@
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_responses_total[1m]))", "legendFormat": "Responses", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_responses_total[$__range]))", "legendFormat": "Responses", "refId": "A" }
       ],
-      "title": "DNS responses (current, last 1m)",
+      "title": "DNS responses (in selected time range)",
       "type": "stat"
     },
     {
@@ -114,9 +114,9 @@
       "options": { "colorMode": "value", "graphMode": "area", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[1m]))", "legendFormat": "Suspicious", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[$__range]))", "legendFormat": "Suspicious", "refId": "A" }
       ],
-      "title": "Suspicious DNS (current, last 1m)",
+      "title": "Suspicious DNS (in selected time range)",
       "type": "stat"
     },
     {
@@ -204,9 +204,9 @@
       "id": 13,
       "options": { "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "right", "showLegend": true } },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[1m])) by (threat_type)", "legendFormat": "{{ threat_type }}", "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "${datasource}" }, "expr": "sum(increase(dns_suspicious_total[$__range])) by (threat_type)", "legendFormat": "{{ threat_type }}", "refId": "A" }
       ],
-      "title": "Suspicious by threat type (current, last 1m)",
+      "title": "Suspicious by threat type (in selected time range)",
       "type": "timeseries"
     }
   ],
