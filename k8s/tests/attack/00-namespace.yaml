@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: attack
-  labels:
-    app.kubernetes.io/name: attack
-    purpose: dns-tunnel-monitor-testing
