@@ -1,6 +1,8 @@
 # Karauley (DNS Tunnel Monitor)
 
-![Karauley logo](docs/logo.png)
+<p align="left">
+  <img src="docs/logo.png" alt="Karauley logo" width="220" />
+</p>
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](#requirements)
 [![Linux](https://img.shields.io/badge/OS-Linux-FCC624?logo=linux&logoColor=black)](#requirements)
